@@ -1,0 +1,15 @@
+vnstock-data>=0.1.0
+vnstock-ta>=0.1.0
+pandas>=2.0.0
+
+plotly
+kaleido
+python-dotenv
+requests
+numpy<2
+
+pandas_ta
+pyarrow
+requests
+streamlit>=1.32
+vnstock
