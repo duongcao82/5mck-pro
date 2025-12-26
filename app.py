@@ -1,14 +1,16 @@
 import sys
 import os
 import streamlit as st
-st.write("CWD:", os.getcwd())
-st.write("sys.path[0:3]:", sys.path[:3])
+import os
+import streamlit as st
 
-try:
-    import vnstock_data
-    st.success("✅ vnstock_data import OK")
-except Exception as e:
-    st.error(f"❌ vnstock_data import FAIL: {e}")
+DEBUG = os.getenv("DEBUG_APP", "0") == "1"
+
+if DEBUG:
+    import sys
+    st.write("CWD:", os.getcwd())
+    st.write("sys.path[0:3]:", sys.path[:3])
+
     
 from universe import get_vnallshare_universe
 from scanner import scan_symbol
