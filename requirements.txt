@@ -1,14 +1,10 @@
-vnstock-ta
 pandas>=2.0.0
-
 plotly
 kaleido
 python-dotenv
 requests
 numpy<2
-
 pandas_ta
 pyarrow
 requests
 streamlit>=1.32
-vnstock
