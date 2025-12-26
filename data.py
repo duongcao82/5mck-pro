@@ -16,8 +16,7 @@ try:
     HAS_PREMIUM = True
 except ImportError:
     HAS_PREMIUM = False
-    st.error("⚠️ Chưa cài đặt thư viện 'vnstock_data' hoặc 'vnstock_ta'. Vui lòng cài đặt để dùng tính năng Sponsor.")
-
+    
 # Cấu hình Log
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
