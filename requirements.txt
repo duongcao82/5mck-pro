@@ -9,3 +9,6 @@ pyarrow
 vnstock
 tqdm
 numba>=0.59
+vnstock-data
+vnstock-pipeline
+vnii
