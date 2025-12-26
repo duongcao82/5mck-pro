@@ -7,4 +7,5 @@ python-dotenv
 requests
 pyarrow
 vnstock
+tqdm
 numba>=0.59
