@@ -1,5 +1,4 @@
-vnstock-data>=0.1.0
-vnstock-ta>=0.1.0
+vnstock-ta
 pandas>=2.0.0
 
 plotly

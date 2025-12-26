@@ -1,0 +1,11 @@
+_E='symbol'
+_D='change_pct'
+_C='change'
+_B='ThayDoi'
+_A='time'
+_BASE_URL='https://s.cafef.vn/Ajax/PageNew/DataHistory'
+_PRICE_HISTORY_MAP={'Ngay':_A,'GiaMoCua':'open','GiaCaoNhat':'high','GiaThapNhat':'low','GiaDongCua':'close','GiaDieuChinh':'adjusted_price',_B:_C,_D:_D,'KhoiLuongKhopLenh':'matched_volume','GiaTriKhopLenh':'matched_value','KLThoaThuan':'deal_volume','GtThoaThuan':'deal_value'}
+_FOREIGN_TRADE_MAP={'Ngay':_A,'KLGDRong':'fr_net_volume','GTDGRong':'fr_net_value',_B:_C,'KLMua':'fr_buy_volume','GtMua':'fr_buy_value','KLBan':'fr_sell_volume','GtBan':'fr_sell_value','RoomConLai':'fr_remaining_room','DangSoHuu':'fr_ownership'}
+_PROP_TRADE_MAP={'Symbol':_E,'Date':_A,'KLcpMua':'prop_buy_volume','KlcpBan':'prop_sell_volume','GtMua':'prop_buy_value','GtBan':'prop_sell_value'}
+_ORDER_STATS_MAP={'Date':_A,_B:_C,'SoLenhMua':'buy_orders','SoLenhDatBan':'sell_orders','KLDatMua':'buy_volume','KLDatBan':'sell_volume','ChenhLechKL':'volume_diff','KLTB1LenhMua':'avg_buy_order_volume','KLTB1LenhBan':'avg_sell_order_volume'}
+_INSIDER_DEAL_MAP={'Stock':_E,'HolderID':'holder_id','TransactionMan':'transaction_man','TransactionManPosition':'transaction_man_position','RelatedManPosition':'related_man_position','RelatedMan':'related_man','VolumeBeforeTransaction':'volume_before_transaction','PlanBuyVolume':'plan_buy_volume','PlanSellVolume':'plan_sell_volume','PlanBeginDate':'plan_begin_date','PlanEndDate':'plan_end_date','RealBuyVolume':'real_buy_volume','RealSellVolume':'real_sell_volume','RealEndDate':'real_end_date','PublishedDate':'published_date','OrderDate':'order_date','VolumeAfterTransaction':'volume_after_transaction','TransactionNote':'transaction_note','ShareHolderCode':'shareholder_code','TyLeSoHuu':'ownership_percentage'}

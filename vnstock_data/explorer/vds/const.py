@@ -1,0 +1,2 @@
+_BASE_URL='https://livedragon.vdsc.com.vn/'
+_ORDER_MATCH_MAPPING={'flr_price':'floor_price','f_sell_vol':'foreign_sell_vol','floor_code':'exchange','hig_price':'high_price','trade_time':'time','code':'symbol','f_buy_vol':'foreign_buy_vol','cei_price':'ceiling_price'}
