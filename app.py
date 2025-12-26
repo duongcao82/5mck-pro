@@ -1,5 +1,6 @@
 import sys
 import os
+import streamlit as st
 st.write("CWD:", os.getcwd())
 st.write("sys.path[0:3]:", sys.path[:3])
 
@@ -12,7 +13,7 @@ except Exception as e:
 from universe import get_vnallshare_universe
 from scanner import scan_symbol
 import pandas as pd
-import streamlit as st
+
 import time
 import concurrent.futures
 pd.set_option('future.no_silent_downcasting', True)
