@@ -156,14 +156,12 @@ class ParquetCacheExporter(Exporter):
 # 4. HÀM CHẠY CHÍNH (ĐÃ FIX LỖI THAM SỐ)
 # ==============================================================================
 
-def run_bulk_update(tickers_list, days_back=365):
+def run_bulk_update(tickers_list, days_back=200):
     """
-    Chạy cập nhật dữ liệu.
-    [FIX] Thêm lại tham số days_back để tương thích với app.py cũ.
-    Tuy nhiên logic bên trong vẫn tuân thủ yêu cầu:
-    1. D1: 365 ngày (hoặc theo days_back nếu muốn)
-    2. 1H: 50 ngày
-    3. 15m: 20 ngày
+    Cập nhật dữ liệu đa khung thời gian:
+    - D1: 365 ngày
+    - 1H: 50 ngày
+    - 15m: 20 ngày
     """
     if not HAS_PIPELINE:
         return "⚠️ Lỗi: Chưa cài đặt thư viện 'vnstock_data'."
@@ -173,36 +171,30 @@ def run_bulk_update(tickers_list, days_back=365):
         exporter = ParquetCacheExporter()
         scheduler = Scheduler(fetcher=fetcher, exporter=exporter, max_workers=10)
         
-        end_date = now_vn().strftime('%Y-%m-%d')        
-        # --- [BATCH 1] DỮ LIỆU NGÀY (D1) ---
-        # Sử dụng tham số days_back để tránh lỗi gọi hàm, mặc định là 365
-        start_d1 = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-        print(f"🔄 [1/3] Bắt đầu tải D1 ({days_back} ngày)...")
-        scheduler.run(
-            tickers=tickers_list,
-            fetcher_kwargs={'start': start_d1, 'end': end_date, 'interval': '1D'},
-            exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '1D'}
-        )
-
-        # --- [BATCH 2] DỮ LIỆU 1 GIỜ (1H) - 300 Ngày (Cố định) ---
-        start_1h = (datetime.now() - timedelta(days=300)).strftime('%Y-%m-%d')
-        print("🔄 [2/3] Bắt đầu tải 1H (300 ngày)...")
-        scheduler.run(
-            tickers=tickers_list,
-            fetcher_kwargs={'start': start_1h, 'end': end_date, 'interval': '1H'},
-            exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '1H'}
-        )
-
-        # --- [BATCH 3] DỮ LIỆU 15 PHÚT (15m) - 20 Ngày (Cố định) ---
-        start_15m = (datetime.now() - timedelta(days=300)).strftime('%Y-%m-%d')
-        print("🔄 [3/3] Bắt đầu tải 15m (300 ngày)...")
-        scheduler.run(
-            tickers=tickers_list,
-            fetcher_kwargs={'start': start_15m, 'end': end_date, 'interval': '15m'},
-            exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '15m'}
-        )
+        # 1. Lấy thời gian hiện tại theo VN để đồng nhất
+        now = now_vn() 
+        end_date = now.strftime('%Y-%m-%d')
         
-        return "✅ Đã cập nhật xong dữ liệu (D1, 1H, 15m)."
+        # 2. Định nghĩa các cấu hình tải
+        configs = [
+            {"label": "D1", "days": days_back, "interval": "1D"},
+            {"label": "1H", "days": 30, "interval": "1H"},
+            {"label": "15m", "days": 12, "interval": "15m"}
+        ]
+        
+        # 3. Chạy vòng lặp cập nhật
+        for i, cfg in enumerate(configs, 1):
+            start_date = (now - timedelta(days=cfg['days'])).strftime('%Y-%m-%d')
+            print(f"🔄 [{i}/3] Đang tải {cfg['label']} ({cfg['days']} ngày) | Từ {start_date} đến {end_date}")
+            
+            scheduler.run(
+                tickers=tickers_list,
+                fetcher_kwargs={'start': start_date, 'end': end_date, 'interval': cfg['interval']},
+                exporter_kwargs={'output_dir': CACHE_DIR, 'interval': cfg['interval']}
+            )
+        
+        return f"✅ Đã cập nhật xong dữ liệu: D1 ({days_back}d), 1H (50d), 15m (20d)."
+        
     except Exception as e:
         return f"❌ Lỗi Runtime: {str(e)}"
 

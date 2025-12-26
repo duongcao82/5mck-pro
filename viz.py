@@ -269,8 +269,8 @@ def plot_single_timeframe(
 
     # --- C. MOVING AVERAGES (MA) ---
     if show_ma:
-        mas = [('SMA_10', '#2962ff', 0.8), ('SMA_20', '#ffd600', 0.8), ('EMA_50', '#ff3d00', 1.0), 
-               ('EMA_100', '#00bcd4', 0.8), ('EMA_200', '#e0e0e0', 1.0)]
+        mas = [('SMA_10', '#2962ff', 0.8), ('SMA_20', '#ffd600', 0.8), ('EMA_50', '#ff3d00', 1.0)] 
+               #('EMA_100', '#00bcd4', 0.8), ('EMA_200', '#e0e0e0', 1.0)]
         for ma, color, width in mas:
             if ma in df.columns:
                 fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=width), name=ma), row=1, col=1)

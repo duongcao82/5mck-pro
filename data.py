@@ -235,7 +235,10 @@ def load_data_with_cache(symbol, days_to_load=365, timeframe='1D', end_date=None
             start_date_str = (last_cached_date + timedelta(days=1)).strftime("%Y-%m-%d")
             fetch_mode = 'history' if days_gap > 3 else 'realtime'
     else:
-        start_date_str = (now - timedelta(days=days_to_load + 200)).strftime("%Y-%m-%d")
+        # CHỖ CẦN SỬA: Tải đúng số ngày cần thiết + biên độ an toàn nhỏ (ví dụ 10 ngày)
+        # thay vì + 200 ngày như cũ
+        safety_margin = 10 
+        start_date_str = (now - timedelta(days=days_to_load + safety_margin)).strftime("%Y-%m-%d")
         fetch_mode = 'history'
 
     # Tránh lỗi ngày bắt đầu lớn hơn ngày kết thúc

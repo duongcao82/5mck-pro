@@ -10,7 +10,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df.ta.sma(length=10, append=True)
     df.ta.sma(length=20, append=True)
     df.ta.ema(length=50, append=True)
-    df.ta.sma(length=200, append=True)
+    #df.ta.sma(length=200, append=True)
 
     # --- 2. RSI ---
     df.ta.rsi(length=14, append=True)
