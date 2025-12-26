@@ -105,6 +105,7 @@ with col_logo2:
         except: st.image(img_vps, width='stretch')
 
 st.sidebar.markdown("---")
+use_smart_money = st.sidebar.checkbox("💰 Smart Money (Foreign/Prop/Depth)", value=False)
 
 symbol_input = st.sidebar.text_input("🔍 Tra cứu Mã:", value=st.session_state.current_symbol).upper()
 if symbol_input != st.session_state.current_symbol:
@@ -135,19 +136,27 @@ use_trendline = st.sidebar.checkbox("Trendlines", value=True)
 # ==============================================================================
 # HÀM XỬ LÝ DỮ LIỆU VÀ VẼ BIỂU ĐỒ (ĐÃ CẬP NHẬT LOGIC SKIP ZONES)
 # ==============================================================================
-def process_and_plot(df, interval, show_vol_param=True, show_ma_param=True, show_vsa_param=False, htf_zones=[], skip_current_zones=False):
-    """
-    Xử lý dữ liệu, tính toán các chỉ báo SMC và gọi hàm vẽ biểu đồ cho một khung thời gian.
-    Args:
-        skip_current_zones (bool): Nếu True, sẽ không vẽ OB/FVG của chính khung thời gian này (dùng cho khung 15m để giảm nhiễu).
-    """
-    if df is None or df.empty: return go.Figure(), []
-    
-    # 1. Chuẩn bị dữ liệu và tính toán chỉ báo
-    current_sym = st.session_state.current_symbol 
-    res_sm = load_smart_money_data(current_sym)
-    df_smart_money = res_sm[0] if isinstance(res_sm, tuple) else res_sm
+def process_and_plot(
+    df, interval,
+    show_vol_param=True, show_ma_param=True, show_vsa_param=False,
+    htf_zones=[], skip_current_zones=False,
+    enable_smart_money=False
+):
+    if df is None or df.empty:
+        return go.Figure(), []
+
+    current_sym = st.session_state.current_symbol
+
+    df_smart_money = None
+    if enable_smart_money:
+        res_sm = load_smart_money_cached(current_sym)
+        df_smart_money = res_sm[0] if isinstance(res_sm, tuple) else res_sm
+
     df = ensure_smc_columns(df)
+
+    # ... phần còn lại GIỮ NGUYÊN ...
+    # khi gọi hàm vẽ (viz.py) thì truyền df_smart_money vào nếu viz có hỗ trợ
+
     
     # 2. Tính toán các vùng SMC (OB, FVG, Levels)
     smc = compute_smc_levels(df)
@@ -195,23 +204,20 @@ def process_and_plot(df, interval, show_vol_param=True, show_ma_param=True, show
     # Vẫn trả về danh sách zone gốc để dùng cho việc tính toán hợp lưu ở khung nhỏ hơn (nếu cần)
     return fvgs + obs
 
-# ==============================================================================
+# ======================================================================
 # 4. MAIN DASHBOARD (ALL-IN-ONE)
-# ==============================================================================
+# ======================================================================
 st.title(f"📊 Phân tích Kỹ thuật: {st.session_state.current_symbol}")
 
 symbol = st.session_state.current_symbol
-
-# --- Load D1 trước (nhẹ nhất, dùng làm HTF gốc) ---
 df_1d = load_data_with_cache(symbol, days_to_load=365, timeframe="1D")
 
-if df_1d is not None and not df_1d.empty:
+if not df_1d.empty:
     last = df_1d.iloc[-1]
     prev = df_1d.iloc[-2] if len(df_1d) > 1 else last
     chg = last["Close"] - prev["Close"]
     pct = (chg / prev["Close"]) * 100 if prev["Close"] != 0 else 0
 
-    # ================= METRICS =================
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Giá đóng cửa", f"{last['Close']:,.2f}", f"{chg:,.2f} ({pct:.2f}%)")
     c2.metric("Khối lượng (Vol)", f"{last['Volume']:,.0f}")
@@ -224,117 +230,71 @@ if df_1d is not None and not df_1d.empty:
         trend = "SIDEWAY 🦀"
     c4.metric("Trend", trend)
 
-    st.divider()
-
-    # ================= RADIO TIMEFRAME =================
-    tf = st.radio(
-        "📐 Khung thời gian phân tích",
+    # ----- RADIO thay cho TABS: chỉ load 1 khung mỗi lần -----
+    tf_choice = st.radio(
+        "Chọn khung thời gian",
         ["📅 Daily (1D)", "⚡ Hourly (1H)", "⏱️ 15 Minutes"],
-        horizontal=True,
-        index=0
+        horizontal=True
     )
 
-    # ================= SESSION CACHE =================
-    if "d1_zones" not in st.session_state:
-        st.session_state.d1_zones = []
+    d1_zones = []
+    h1_zones = []
 
-    if "h1_zones" not in st.session_state:
-        st.session_state.h1_zones = []
+    # 1) Luôn vẽ 1D trước để lấy HTF zones (nhẹ nhất, đã cache parquet)
+    fig_d1, d1_zones = process_and_plot(
+        df_1d, "1D",
+        show_vol_param=use_vol, show_ma_param=use_ma, show_vsa_param=use_vsa,
+        htf_zones=[],
+        enable_smart_money=use_smart_money
+    )
+    st.plotly_chart(fig_d1, use_container_width=True)
 
-    # ================== DAILY ==================
-    if tf == "📅 Daily (1D)":
-        st.subheader("📅 Daily (1D)")
-
-        d1_zones = process_and_plot(
-            df_1d,
-            "1D",
-            show_vol_param=use_vol,
-            show_ma_param=use_ma,
-            show_vsa_param=use_vsa,
-            htf_zones=[]
-        )
-
-        st.session_state.d1_zones = d1_zones
-
-    # ================== HOURLY ==================
-    elif tf == "⚡ Hourly (1H)":
-        st.subheader("⚡ Hourly (1H)")
-
-        # đảm bảo có D1 zones
-        if not st.session_state.d1_zones:
-            d1_zones = process_and_plot(
-                df_1d,
-                "1D",
-                show_vol_param=use_vol,
-                show_ma_param=use_ma,
-                show_vsa_param=use_vsa,
-                htf_zones=[]
+    # 2) Nếu user chọn 1H thì mới load 1H
+    if tf_choice == "⚡ Hourly (1H)":
+        df_1h = load_data_with_cache(symbol, 200, "1H")
+        if not df_1h.empty:
+            fig_h1, h1_zones = process_and_plot(
+                df_1h, "1H",
+                show_vol_param=False, show_ma_param=False,
+                htf_zones=d1_zones,
+                enable_smart_money=use_smart_money
             )
-            st.session_state.d1_zones = d1_zones
-
-        df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
-
-        if df_1h is not None and not df_1h.empty:
-            h1_zones = process_and_plot(
-                df_1h,
-                "1H",
-                show_vol_param=False,
-                show_ma_param=False,
-                htf_zones=st.session_state.d1_zones
-            )
-            st.session_state.h1_zones = h1_zones
+            st.plotly_chart(fig_h1, use_container_width=True)
         else:
-            st.info("⏳ Đang tải dữ liệu 1H...")
+            st.info("Đang tải dữ liệu 1H...")
 
-    # ================== 15 MINUTES ==================
-    else:
-        st.subheader("⏱️ 15 Minutes")
+    # 3) Nếu user chọn 15m thì mới load 15m
+    if tf_choice == "⏱️ 15 Minutes":
+        df_15m = load_data_with_cache(symbol, 400, "15m")
+        if not df_15m.empty:
+            final_htf = d1_zones.copy()
 
-        # đảm bảo có D1
-        if not st.session_state.d1_zones:
-            d1_zones = process_and_plot(
-                df_1d,
-                "1D",
-                show_vol_param=use_vol,
-                show_ma_param=use_ma,
-                show_vsa_param=use_vsa,
-                htf_zones=[]
-            )
-            st.session_state.d1_zones = d1_zones
+            # nếu đã load H1 trước đó (hoặc muốn load kèm), bạn có thể cho user checkbox “kèm H1 zones”
+            # (khuyến nghị để nhanh: mặc định OFF)
+            use_h1_overlay = st.checkbox("Overlay zones 1H lên 15m", value=False)
+            if use_h1_overlay:
+                df_1h = load_data_with_cache(symbol, 200, "1H")
+                if not df_1h.empty:
+                    _, h1_zones = process_and_plot(
+                        df_1h, "1H",
+                        show_vol_param=False, show_ma_param=False,
+                        htf_zones=d1_zones,
+                        enable_smart_money=False  # tránh gọi smart money thêm 1 lần
+                    )
+                    for z in h1_zones:
+                        z["is_from_1h"] = True
+                    final_htf += h1_zones
 
-        # đảm bảo có H1
-        if not st.session_state.h1_zones:
-            df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
-            if df_1h is not None and not df_1h.empty:
-                h1_zones = process_and_plot(
-                    df_1h,
-                    "1H",
-                    show_vol_param=False,
-                    show_ma_param=False,
-                    htf_zones=st.session_state.d1_zones
-                )
-                st.session_state.h1_zones = h1_zones
-
-        df_15m = load_data_with_cache(symbol, days_to_load=400, timeframe="15m")
-
-        if df_15m is not None and not df_15m.empty:
-            final_htf = st.session_state.d1_zones.copy()
-
-            if st.session_state.h1_zones:
-                for z in st.session_state.h1_zones:
-                    z["is_from_1h"] = True
-                final_htf += st.session_state.h1_zones
-
-            process_and_plot(
-                df_15m,
-                "15m",
-                show_vol_param=False,
-                show_ma_param=False,
+            fig_15, _ = process_and_plot(
+                df_15m, "15m",
+                show_vol_param=False, show_ma_param=False,
                 htf_zones=final_htf,
-                skip_current_zones=True
+                skip_current_zones=True,
+                enable_smart_money=use_smart_money
             )
+            st.plotly_chart(fig_15, use_container_width=True)
         else:
-            st.info("⏳ Đang tải dữ liệu 15m...")
+            st.info("Đang tải dữ liệu 15m...")
 
 else:
     st.error(f"⚠️ Chưa có dữ liệu {symbol}. Hãy bấm 'Cập nhật Dữ liệu' bên dưới.")
