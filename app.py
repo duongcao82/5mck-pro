@@ -1,5 +1,14 @@
 import sys
 import os
+st.write("CWD:", os.getcwd())
+st.write("sys.path[0:3]:", sys.path[:3])
+
+try:
+    import vnstock_data
+    st.success("✅ vnstock_data import OK")
+except Exception as e:
+    st.error(f"❌ vnstock_data import FAIL: {e}")
+    
 from universe import get_vnallshare_universe
 from scanner import scan_symbol
 import pandas as pd
