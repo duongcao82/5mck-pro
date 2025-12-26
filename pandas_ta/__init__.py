@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
-from importlib.metadata import version
-version = version("pandas-ta")
+try:
+    from importlib.metadata import version as _version
+    __version__ = _version("pandas-ta")
+except Exception:
+    __version__ = "0.0.0"
+
 
 from pandas_ta.maps import EXCHANGE_TZ, RATE, Category, Imports
 from pandas_ta.utils import *
