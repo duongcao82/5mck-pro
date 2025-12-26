@@ -59,6 +59,11 @@ def core_healthcheck_ui():
 # 1. SETUP UI & CONFIG
 # ==============================================================================
 st.set_page_config(page_title="5MCK Pro", layout="wide", page_icon="📈")
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+st.caption("Giờ Việt Nam: " + datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%Y-%m-%d %H:%M:%S"))
+
 st.markdown("""
     <style>
         .stApp { background-color: #0e1117; color: white; } 
@@ -195,62 +200,145 @@ def process_and_plot(df, interval, show_vol_param=True, show_ma_param=True, show
 # ==============================================================================
 st.title(f"📊 Phân tích Kỹ thuật: {st.session_state.current_symbol}")
 
-# --- [PHẦN 1] BIỂU ĐỒ & CHỈ SỐ (CHART) ---
 symbol = st.session_state.current_symbol
+
+# --- Load D1 trước (nhẹ nhất, dùng làm HTF gốc) ---
 df_1d = load_data_with_cache(symbol, days_to_load=365, timeframe="1D")
 
-if not df_1d.empty:
+if df_1d is not None and not df_1d.empty:
     last = df_1d.iloc[-1]
     prev = df_1d.iloc[-2] if len(df_1d) > 1 else last
-    chg = last['Close'] - prev['Close']
-    pct = (chg / prev['Close']) * 100 if prev['Close'] != 0 else 0
-    
+    chg = last["Close"] - prev["Close"]
+    pct = (chg / prev["Close"]) * 100 if prev["Close"] != 0 else 0
+
+    # ================= METRICS =================
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Giá đóng cửa", f"{last['Close']:,.2f}", f"{chg:,.2f} ({pct:.2f}%)")
     c2.metric("Khối lượng (Vol)", f"{last['Volume']:,.0f}")
     c3.metric("RSI (14)", f"{last.get('RSI_14', 0):.2f}")
-    
-    ma20 = last.get('SMA_20', 0); ema50 = last.get('EMA_50', 0)
-    trend = "UP 🚀" if last['Close'] > ma20 else "DOWN 🐻"
-    if last['Close'] > ma20 and last['Close'] < ema50: trend = "SIDEWAY 🦀"
+
+    ma20 = last.get("SMA_20", 0)
+    ema50 = last.get("EMA_50", 0)
+    trend = "UP 🚀" if last["Close"] > ma20 else "DOWN 🐻"
+    if last["Close"] > ma20 and last["Close"] < ema50:
+        trend = "SIDEWAY 🦀"
     c4.metric("Trend", trend)
 
-    subtab1, subtab2, subtab3 = st.tabs(["📅 Daily (1D)", "⚡ Hourly (1H)", "⏱️ 15 Minutes"])
-    d1_zones = []
-    h1_zones = []
+    st.divider()
 
-    with subtab1: 
-        d1_zones = process_and_plot(df_1d, "1D", show_vol_param=use_vol, show_ma_param=use_ma, show_vsa_param=use_vsa, htf_zones=[])
-    
-    with subtab2:
-        df_1h = load_data_with_cache(symbol, 200, "1H")
-        if not df_1h.empty: 
-            h1_zones = process_and_plot(df_1h, "1H", show_vol_param=False, show_ma_param=False, htf_zones=d1_zones)
-        else: st.info("Đang tải dữ liệu 1H...")
-        
-    with subtab3:
-        df_15m = load_data_with_cache(symbol, 400, "15m")
-        if not df_15m.empty: 
-            # Tạo danh sách HTF mới để không làm hỏng dữ liệu gốc của d1_zones/h1_zones
-            final_htf = d1_zones.copy()
-            
-            # Kiểm tra h1_zones tồn tại và gán nhãn để viz.py đổi màu Xanh biển
-            if 'h1_zones' in locals() and h1_zones:
-                for z in h1_zones: 
-                    z['is_from_1h'] = True
-                final_htf += h1_zones
-            
+    # ================= RADIO TIMEFRAME =================
+    tf = st.radio(
+        "📐 Khung thời gian phân tích",
+        ["📅 Daily (1D)", "⚡ Hourly (1H)", "⏱️ 15 Minutes"],
+        horizontal=True,
+        index=0
+    )
+
+    # ================= SESSION CACHE =================
+    if "d1_zones" not in st.session_state:
+        st.session_state.d1_zones = []
+
+    if "h1_zones" not in st.session_state:
+        st.session_state.h1_zones = []
+
+    # ================== DAILY ==================
+    if tf == "📅 Daily (1D)":
+        st.subheader("📅 Daily (1D)")
+
+        d1_zones = process_and_plot(
+            df_1d,
+            "1D",
+            show_vol_param=use_vol,
+            show_ma_param=use_ma,
+            show_vsa_param=use_vsa,
+            htf_zones=[]
+        )
+
+        st.session_state.d1_zones = d1_zones
+
+    # ================== HOURLY ==================
+    elif tf == "⚡ Hourly (1H)":
+        st.subheader("⚡ Hourly (1H)")
+
+        # đảm bảo có D1 zones
+        if not st.session_state.d1_zones:
+            d1_zones = process_and_plot(
+                df_1d,
+                "1D",
+                show_vol_param=use_vol,
+                show_ma_param=use_ma,
+                show_vsa_param=use_vsa,
+                htf_zones=[]
+            )
+            st.session_state.d1_zones = d1_zones
+
+        df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
+
+        if df_1h is not None and not df_1h.empty:
+            h1_zones = process_and_plot(
+                df_1h,
+                "1H",
+                show_vol_param=False,
+                show_ma_param=False,
+                htf_zones=st.session_state.d1_zones
+            )
+            st.session_state.h1_zones = h1_zones
+        else:
+            st.info("⏳ Đang tải dữ liệu 1H...")
+
+    # ================== 15 MINUTES ==================
+    else:
+        st.subheader("⏱️ 15 Minutes")
+
+        # đảm bảo có D1
+        if not st.session_state.d1_zones:
+            d1_zones = process_and_plot(
+                df_1d,
+                "1D",
+                show_vol_param=use_vol,
+                show_ma_param=use_ma,
+                show_vsa_param=use_vsa,
+                htf_zones=[]
+            )
+            st.session_state.d1_zones = d1_zones
+
+        # đảm bảo có H1
+        if not st.session_state.h1_zones:
+            df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
+            if df_1h is not None and not df_1h.empty:
+                h1_zones = process_and_plot(
+                    df_1h,
+                    "1H",
+                    show_vol_param=False,
+                    show_ma_param=False,
+                    htf_zones=st.session_state.d1_zones
+                )
+                st.session_state.h1_zones = h1_zones
+
+        df_15m = load_data_with_cache(symbol, days_to_load=400, timeframe="15m")
+
+        if df_15m is not None and not df_15m.empty:
+            final_htf = st.session_state.d1_zones.copy()
+
+            if st.session_state.h1_zones:
+                for z in st.session_state.h1_zones:
+                    z["is_from_1h"] = True
+                final_htf += st.session_state.h1_zones
+
             process_and_plot(
-                df_15m, "15m", 
-                show_vol_param=False, 
-                show_ma_param=False, 
+                df_15m,
+                "15m",
+                show_vol_param=False,
+                show_ma_param=False,
                 htf_zones=final_htf,
                 skip_current_zones=True
-              )  # <--
-        else: 
-            st.info("Đang tải dữ liệu 15m...")
+            )
+        else:
+            st.info("⏳ Đang tải dữ liệu 15m...")
+
 else:
     st.error(f"⚠️ Chưa có dữ liệu {symbol}. Hãy bấm 'Cập nhật Dữ liệu' bên dưới.")
+
 
 # --- [PHẦN 3] SCANNER & PIPELINE (ĐỘC LẬP) ---
 st.markdown("---")
