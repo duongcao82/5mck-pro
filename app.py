@@ -355,7 +355,7 @@ with c_btn1:
         else:
             with st.status("⏳ Đang tải dữ liệu...", expanded=True) as status:
                 # Gọi hàm từ pipeline_manager
-                res = run_bulk_update(scan_symbols, days_back=365)
+                res = run_bulk_update(scan_symbols, days_back=3)
                 if "Lỗi" not in res:
                     status.update(label="✅ Đã cập nhật Cache!", state="complete", expanded=False)
                     st.toast("Done!", icon="💾")
