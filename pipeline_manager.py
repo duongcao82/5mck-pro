@@ -36,9 +36,7 @@ try:
     except ImportError:
         Exporter = object
 
-    # C. Import Quote
-    from vnstock_data import Quote
-    
+     
     HAS_PIPELINE = True
 
 except ImportError as e:
@@ -95,7 +93,10 @@ class AppCacheFetcher(VNFetcher):
     """Fetcher: Tải dữ liệu hỗ trợ nhiều khung thời gian"""
     def _vn_call(self, ticker: str, **kwargs) -> pd.DataFrame:
         if not HAS_PIPELINE: return pd.DataFrame()
-        
+        try:
+            from vnstock_data import Quote
+        except Exception:
+            return pd.DataFrame()
         start = kwargs.get('start')
         end = kwargs.get('end')
         interval = kwargs.get('interval', '1D') 

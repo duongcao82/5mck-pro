@@ -36,18 +36,7 @@ except Exception:
     
 # Cấu hình Log
 logging.getLogger('urllib3').setLevel(logging.WARNING)
-
-# [QUAN TRỌNG] Nạp API Key Sponsor
-try:
-    has_secret = "vnstock_api_key" in st.secrets
-except Exception:
-    has_secret = False
-
-if has_secret:
-    api_key = st.secrets["vnstock_api_key"]
-else:
-    api_key = None
-
+s
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "data_cache")
 if not os.path.exists(CACHE_DIR): os.makedirs(CACHE_DIR)
