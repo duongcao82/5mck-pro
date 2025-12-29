@@ -200,36 +200,32 @@ def run_bulk_update(tickers_list, days_back=200):
         return f"❌ Lỗi Runtime: {str(e)}"
 
 # Cập nhật trong pipeline_manager.py
-def smart_universe_scan(universe_list, min_vol=100000, min_price=10):
+def run_universe_pipeline(universe_list, days=20):
     """
-    Tối ưu: 
-    1. Chỉ update D1 cho toàn bộ list (Sử dụng Multi-thread Worker = 20 vì D1 nhẹ).
-    2. Lọc danh sách đạt vol/price.
-    3. Trả về list 'active_symbols' để Scanner tiếp tục xử lý sâu (1H/15m).
+    Tối ưu hóa quy trình cập nhật Universe:
+    1. Chỉ lấy D1 (nhẹ) để kiểm tra thanh khoản.
+    2. Dùng ThreadPool để chạy nhanh trên 20 workers.
     """
     from data import load_data_with_cache
+    import concurrent.futures
+
+    print(f"⚡ Pipeline: Đang quét {len(universe_list)} mã (D1)...")
     
-    active_symbols = []
-    
-    # B1: Quét nhanh D1
-    print(f"⚡ Đang lọc thô {len(universe_list)} mã...")
-    
-    # Mẹo: Dùng ThreadPoolExecutor để check Cache/API nhanh
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        # Load cache D1 (rất nhanh vì file parquet đã có sẵn 365 ngày, chỉ fetch thêm 1 ngày)
-        future_to_sym = {executor.submit(load_data_with_cache, sym, 50, "1D"): sym for sym in universe_list}
-        
-        for future in concurrent.futures.as_completed(future_to_sym):
-            sym = future_to_sym[future]
-            try:
-                df = future.result()
-                if df is not None and not df.empty:
-                    last = df.iloc[-1]
-                    avg_vol = df['Volume'].tail(20).mean()
-                    # Điều kiện lọc Universe
-                    if last['Close'] >= min_price and avg_vol >= min_vol:
-                        active_symbols.append(sym)
-            except:
-                pass
+    # Hàm con để update 1 mã
+    def _update_worker(sym):
+        try:
+            # Load 20 ngày gần nhất để tính thanh khoản là đủ
+            load_data_with_cache(sym, days_to_load=days, timeframe="1D")
+            return True
+        except:
+            return False
+
+    success_count = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(_update_worker, sym): sym for sym in universe_list}
+        for future in concurrent.futures.as_completed(futures):
+            if future.result():
+                success_count += 1
                 
-    return active_symbols
+    print(f"✅ Pipeline: Đã cập nhật xong {success_count}/{len(universe_list)} mã.")
+    return True
