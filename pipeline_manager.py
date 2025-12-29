@@ -198,33 +198,37 @@ def run_bulk_update(tickers_list, days_back=200):
     except Exception as e:
         return f"❌ Lỗi Runtime: {str(e)}"
 
-def run_universe_pipeline(tickers_list, days=20):
+# Cập nhật trong pipeline_manager.py
+def smart_universe_scan(universe_list, min_vol=100000, min_price=10):
     """
-    Chạy cập nhật SIÊU TỐC cho Universe.
-    - Chỉ tải D1.
-    - Chỉ tải 20 ngày.
-    - Max Workers cao (20) để quét nhanh.
+    Tối ưu: 
+    1. Chỉ update D1 cho toàn bộ list (Sử dụng Multi-thread Worker = 20 vì D1 nhẹ).
+    2. Lọc danh sách đạt vol/price.
+    3. Trả về list 'active_symbols' để Scanner tiếp tục xử lý sâu (1H/15m).
     """
-    if not HAS_PIPELINE: return False
+    from data import load_data_with_cache
     
-    try:
-        fetcher = AppCacheFetcher()
-        exporter = ParquetCacheExporter()
+    active_symbols = []
+    
+    # B1: Quét nhanh D1
+    print(f"⚡ Đang lọc thô {len(universe_list)} mã...")
+    
+    # Mẹo: Dùng ThreadPoolExecutor để check Cache/API nhanh
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # Load cache D1 (rất nhanh vì file parquet đã có sẵn 365 ngày, chỉ fetch thêm 1 ngày)
+        future_to_sym = {executor.submit(load_data_with_cache, sym, 50, "1D"): sym for sym in universe_list}
         
-        # Tăng Worker lên 20 vì request 1D/20 ngày rất nhẹ, không sợ nghẽn
-        scheduler = Scheduler(fetcher=fetcher, exporter=exporter, max_workers=20)
-        
-        end_date = now_vn().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        
-        print(f"[Pipeline] ⚡ Kích hoạt Universe Bulk Update: {len(tickers_list)} mã (D1, {days} ngày)...")
-        
-        scheduler.run(
-            tickers=tickers_list,
-            fetcher_kwargs={'start': start_date, 'end': end_date, 'interval': '1D'},
-            exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '1D'}
-        )
-        return True
-    except Exception as e:
-        print(f"Pipeline Error: {e}")
-        return False
+        for future in concurrent.futures.as_completed(future_to_sym):
+            sym = future_to_sym[future]
+            try:
+                df = future.result()
+                if df is not None and not df.empty:
+                    last = df.iloc[-1]
+                    avg_vol = df['Volume'].tail(20).mean()
+                    # Điều kiện lọc Universe
+                    if last['Close'] >= min_price and avg_vol >= min_vol:
+                        active_symbols.append(sym)
+            except:
+                pass
+                
+    return active_symbols

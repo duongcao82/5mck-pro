@@ -166,7 +166,7 @@ def fetch_stock_data(symbol: str, start_str: str, end_str: str, interval: str, m
     if mode == "history":
         sources = ["tcbs", "vnd", "vci"]
     else:
-        sources = ["tcbs", "vci", "vnd"]
+        sources = ["tcbs", "vci"]
 
     is_index = symbol in ["VNINDEX", "VN30", "HNX", "HNX30", "UPCOM", "VNXALL"]
 
