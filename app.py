@@ -237,6 +237,23 @@ def process_and_plot(
 st.title(f"📊 Phân tích Kỹ thuật: {st.session_state.current_symbol}")
 
 symbol = st.session_state.current_symbol
+
+# ---- GATE: không load data ngay khi startup (tránh 503) ----
+if "dashboard_loaded" not in st.session_state:
+    st.session_state.dashboard_loaded = False
+
+col_gate1, col_gate2 = st.columns([1, 3])
+with col_gate1:
+    if st.button("📥 Tải dữ liệu & Vẽ chart", type="primary"):
+        st.session_state.dashboard_loaded = True
+with col_gate2:
+    st.info("Tip: Lần đầu vào Cloud hãy bấm nút để tải dữ liệu. Sau khi có cache, lần sau sẽ nhanh hơn.")
+
+if not st.session_state.dashboard_loaded:
+    # Lên giao diện ngay, không chạy load_data_with_cache
+    st.stop()
+
+# ---- Từ đây mới bắt đầu load dữ liệu ----
 df_1d = load_data_with_cache(symbol, days_to_load=365, timeframe="1D")
 
 if df_1d is not None and not df_1d.empty:
@@ -290,7 +307,6 @@ if df_1d is not None and not df_1d.empty:
 
     # ========= 1H =========
     elif tf_choice == "⚡ Hourly (1H)":
-        # đảm bảo có HTF D1 zones, nhưng không cần dựng fig D1
         if not st.session_state.d1_zones:
             _, st.session_state.d1_zones = process_and_plot(
                 df_1d,
@@ -300,7 +316,7 @@ if df_1d is not None and not df_1d.empty:
                 show_vsa_param=False,
                 htf_zones=[],
                 enable_smart_money=False,
-                build_fig=False,  # chỉ lấy zones
+                build_fig=False,
             )
 
         df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
@@ -327,7 +343,6 @@ if df_1d is not None and not df_1d.empty:
 
     # ========= 15m =========
     else:
-        # đảm bảo D1 zones (không dựng fig)
         if not st.session_state.d1_zones:
             _, st.session_state.d1_zones = process_and_plot(
                 df_1d,
@@ -344,7 +359,6 @@ if df_1d is not None and not df_1d.empty:
 
         h1_zones = []
         if use_h1_overlay:
-            # load H1 zones (không dựng fig) để overlay lên 15m
             df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
             if df_1h is not None and not df_1h.empty:
                 _, h1_zones = process_and_plot(
@@ -354,7 +368,7 @@ if df_1d is not None and not df_1d.empty:
                     show_ma_param=False,
                     show_vsa_param=False,
                     htf_zones=st.session_state.d1_zones,
-                    enable_smart_money=False,  # tránh gọi smart money thêm lần
+                    enable_smart_money=False,
                     build_fig=False,
                 )
                 for z in h1_zones:
@@ -384,6 +398,7 @@ if df_1d is not None and not df_1d.empty:
 
 else:
     st.error(f"⚠️ Chưa có dữ liệu {symbol}. Hãy bấm 'Cập nhật Dữ liệu' bên dưới.")
+
 
 # ==============================================================================
 # --- [PHẦN 3] SCANNER & PIPELINE (ĐỘC LẬP) ---

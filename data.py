@@ -1,21 +1,38 @@
-# src/data.py
 import os
-import time
-import pandas as pd
 import streamlit as st
+
+def _get_vnstock_key() -> str | None:
+    # Ưu tiên biến môi trường (Streamlit Cloud set rất tiện)
+    k = os.getenv("VNSTOCK_API_KEY")
+    if k:
+        return k.strip()
+
+    # Fallback: Streamlit secrets
+    try:
+        k2 = st.secrets.get("VNSTOCK_API_KEY", None)
+        if k2:
+            return str(k2).strip()
+    except Exception:
+        pass
+
+    return None
+
+
 import logging
 import random
 from datetime import datetime, timedelta, date
 from config import now_vn
+import time
+import pandas as pd
 
 
 # [SPONSOR] Import thư viện cao cấp
 try:
-    from vnstock_data import Quote,Trading
-    from vnstock_ta import Indicator
-    HAS_PREMIUM = True
-except ImportError:
+    import importlib
+    HAS_PREMIUM = importlib.util.find_spec("vnstock_data") is not None
+except Exception:
     HAS_PREMIUM = False
+
     
 # Cấu hình Log
 logging.getLogger('urllib3').setLevel(logging.WARNING)
@@ -35,6 +52,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "data_cache")
 if not os.path.exists(CACHE_DIR): os.makedirs(CACHE_DIR)
 
+def _lazy_vnstock_data():
+    # Import khi cần, tránh load nặng lúc startup
+    from vnstock_data import Quote, Trading
+    return Quote, Trading
+    
 def calculate_full_indicators(df):
     """
     Sử dụng vnstock_ta (Sponsor) để tính chỉ báo nhanh và chuẩn hơn.
@@ -111,52 +133,88 @@ def _validate_ohlcv_df(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     return df
 
-def fetch_stock_data(symbol, start_str, end_str, interval, mode='history'):
+def fetch_stock_data(symbol: str, start_str: str, end_str: str, interval: str, mode: str = "history"):
     """
-    Hàm wrapper gọi vnstock_data.Quote
-    mode='history': Dùng nguồn ổn định (VND/FMARKET)
-    mode='realtime': Dùng nguồn nhanh (VCI/ENTRADE)
+    Fetch OHLCV từ vnstock_data (Sponsor) theo chiến thuật fallback source.
+    - Ưu tiên: lấy API key trước (ENV/Secrets), set env, rồi mới import vnstock_data (lazy import)
+    - Fallback sources: tcbs -> vnd -> vci (history), tcbs -> vci -> vnd (realtime)
+    - Chuẩn hoá cột + index DatetimeIndex + validate OHLCV
+    - Trả về DataFrame rỗng nếu fail (không crash app)
     """
-    if not HAS_PREMIUM: return pd.DataFrame()
-    
-    # Chiến thuật chọn nguồn (Source Strategy)
-    if mode == 'history':
-        sources = ['tcbs', 'vnd', 'vci'] # Đưa TCBS lên đầu
+    import pandas as pd
+
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return pd.DataFrame()
+
+    # 1) Get key trước (tránh auth/treo khi chưa có key)
+    key = _get_vnstock_key()
+    if not key:
+        return pd.DataFrame()
+
+    # 2) Set env để thư viện đọc được (nếu nó dùng env)
+    os.environ["VNSTOCK_API_KEY"] = key
+
+    # 3) Lazy import vnstock_data
+    try:
+        Quote, Trading = _lazy_vnstock_data()
+    except Exception:
+        # Chưa cài vnstock_data trên Cloud hoặc import lỗi
+        return pd.DataFrame()
+
+    # 4) Strategy sources
+    if mode == "history":
+        sources = ["tcbs", "vnd", "vci"]
     else:
-        sources = ['tcbs', 'vci', 'vnd'] # TCBS realtime cũng rất tốt
-        
-    df_res = pd.DataFrame()
-    
+        sources = ["tcbs", "vci", "vnd"]
+
+    is_index = symbol in ["VNINDEX", "VN30", "HNX", "HNX30", "UPCOM", "VNXALL"]
+
+    # 5) Try each source
     for src in sources:
         try:
-            # [SPONSOR API] Khởi tạo Quote
             quote = Quote(source=src, symbol=symbol)
-            
-            # Gọi hàm history
+
             temp = quote.history(start=start_str, end=end_str, interval=interval)
-            
-            if not temp.empty:
-                df_res = normalize_columns(temp)
-                
-                # Set Index là Date
-                if 'Date' in df_res.columns:
-                    df_res['Date'] = pd.to_datetime(df_res['Date'])
-                    df_res.set_index('Date', inplace=True)
-                
-                # [QUAN TRỌNG] Fix lỗi chia giá (VCI/VND có thể trả về đơn vị đồng)
-                # Chỉ xử lý nếu không phải Index
-                is_index = symbol in ['VNINDEX', 'VN30', 'HNX', 'HNX30', 'UPCOM', 'VNXALL']
-                if not is_index:
-                    if df_res['Close'].mean() > 5000: # Ngưỡng an toàn 5000đ
-                        cols = ['Open', 'High', 'Low', 'Close']
-                        df_res[cols] = df_res[cols] / 1000.0
-                
-                return _validate_ohlcv_df(df_res) # Thành công trả về ngay
-                
+            if temp is None or temp.empty:
+                continue
+
+            df_res = normalize_columns(temp)
+
+            # set index Date
+            if "Date" in df_res.columns:
+                df_res["Date"] = pd.to_datetime(df_res["Date"])
+                df_res.set_index("Date", inplace=True)
+
+            # Ensure DateTimeIndex
+            if not isinstance(df_res.index, pd.DatetimeIndex):
+                df_res.index = pd.to_datetime(df_res.index)
+
+            # Fix đơn vị giá (một số nguồn trả đồng -> chia 1000)
+            if not is_index and "Close" in df_res.columns:
+                try:
+                    if df_res["Close"].mean() > 5000:
+                        cols = ["Open", "High", "Low", "Close"]
+                        for c in cols:
+                            if c in df_res.columns:
+                                df_res[c] = df_res[c] / 1000.0
+                except Exception:
+                    pass
+
+            # Validate schema OHLCV
+            df_res = _validate_ohlcv_df(df_res)
+            if df_res is None or df_res.empty:
+                continue
+
+            return df_res
+
         except Exception:
-            continue # Thử nguồn tiếp theo
-            
-    return df_res
+            # thử nguồn tiếp theo
+            continue
+
+    # Fail all
+    return pd.DataFrame()
+
 
 # ==============================================================================
 # [CORE] LOAD DATA WITH SMART CACHE (INSIDER EDITION)
@@ -289,7 +347,7 @@ def load_smart_money_data(symbol):
     df_foreign = pd.DataFrame()
     df_prop = pd.DataFrame()
     df_depth = pd.DataFrame()
-
+    '''
     # --- 1. LẤY DỮ LIỆU KHỐI NGOẠI & TỰ DOANH (Trading) ---
     # Bắt buộc dùng source='vci' do thư viện giới hạn.
     try:
@@ -337,5 +395,5 @@ def load_smart_money_data(symbol):
             df_depth = quote_vci.price_depth()
         except Exception:
             pass # Cả 2 đều lỗi -> Trả về rỗng
-
+'''
     return df_foreign, df_prop, df_depth
