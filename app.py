@@ -35,7 +35,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # 1. LOGO: Chỉ hiển thị VPS (Tiết kiệm diện tích)
 img_vps = os.path.join(current_dir, "5MCK_VPS.jpg")
 if os.path.exists(img_vps):
-    try: st.sidebar.image(img_vps, width=None, use_container_width=True) # width=None để tự chỉnh
+    try: st.sidebar.image(img_vps, width='stretch') # width=None để tự chỉnh
     except: st.sidebar.title("🎛️ 5MCK Pro")
 else:
     st.sidebar.title("🎛️ 5MCK Pro")
