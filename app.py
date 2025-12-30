@@ -118,15 +118,26 @@ def init_modules():
         detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg
     )
 
-# HIỂN THỊ LOADING SPINNER Ở CHÍNH GIỮA MÀN HÌNH
+# =========================
+# GATE: Nạp hệ thống theo nút bấm (tránh 503)
+# =========================
 if "modules_loaded" not in st.session_state:
-    with st.spinner("🚀 Đang khởi động hệ thống AI (Lần đầu mất khoảng 30s)..."):
-        # Gọi hàm load ở đây
-        vars_loaded = init_modules()
-        st.session_state.vars_loaded = vars_loaded
-        st.session_state.modules_loaded = True
-else:
-    vars_loaded = st.session_state.vars_loaded
+    st.session_state.modules_loaded = False
+
+if not st.session_state.modules_loaded:
+    st.info("✅ UI đã sẵn sàng. Bấm nút dưới để nạp hệ thống (lần đầu sẽ lâu).")
+
+    if st.button("🚀 Nạp hệ thống", type="primary"):
+        with st.spinner("Đang nạp modules..."):
+            st.session_state.vars_loaded = init_modules()
+            st.session_state.modules_loaded = True
+        st.rerun()
+
+    # Chưa nạp thì dừng tại đây => UI lên ngay, không import nặng
+    st.stop()
+
+# Đã nạp xong -> lấy ra dùng
+vars_loaded = st.session_state.vars_loaded
 
 # UNPACK VARIABLES (Bung nén biến ra để dùng)
 (
