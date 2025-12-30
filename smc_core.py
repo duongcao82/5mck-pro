@@ -14,7 +14,7 @@ def detect_swings(df: pd.DataFrame, lookback: int = 2, copy: bool = True) -> pd.
         return df
 
     if copy:
-        df = df.copy()
+        df = df.copy() if copy else df if copy else df
     # Ensure columns exist (in-place when copy=False)
     df["Swing_High"] = False
     df["Swing_Low"] = False
@@ -681,137 +681,105 @@ def entry_breaker_retest(df: pd.DataFrame):
 # 6) AGGREGATOR & SCORING (UPDATED)
 # ==============================================================================
 
-def detect_entry_models(df_htf: pd.DataFrame, df_ltf=None, df_pair=None, return_artifacts: bool = False):
+def detect_entry_models(
+    df_htf: pd.DataFrame,
+    df_ltf=None,
+    df_pair=None,
+    return_artifacts: bool = False
+):
     """
-    Tổng hợp tất cả các models theo thứ tự ưu tiên
+    Tổng hợp tất cả các models theo thứ tự ưu tiên.
+    Nếu return_artifacts=True: attach _ctx={fvgs, obs, sweep} để scanner reuse (unlock tốc độ).
     """
-    # 1. Super Strong
+
+    def _finalize_entry(e):
+        if not e or not return_artifacts:
+            return e
+
+        # NOTE: dùng đúng signature hiện tại của core
+        try:
+            fvgs = detect_fvg_zones(df_htf, max_zones=5, future_window=60)
+        except Exception:
+            fvgs = []
+
+        try:
+            # detect_order_blocks hiện dùng (lookback, max_obs)
+            obs = detect_order_blocks(df_htf, lookback=120, max_obs=5)
+        except Exception:
+            obs = []
+
+        try:
+            sweep = detect_liquidity_sweep(df_htf)
+        except Exception:
+            sweep = None
+
+        e = dict(e)
+        e["_ctx"] = {"fvgs": fvgs, "obs": obs, "sweep": sweep}
+        return e
+
+    # =========================
+    # 1) Super Strong
+    # =========================
     e = entry_ls_mss_bb_fvg(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            # Attach HTF artifacts to avoid recomputation in scanner
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
-    #e = entry_amd_setup(df_htf)
-    #if e: return e
+        return _finalize_entry(e)
 
-    # 2. Strong
+    # =========================
+    # 2) Strong
+    # =========================
     e = entry_silver_bullet(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
+        return _finalize_entry(e)
+
     e = entry_ls_mss_fvg(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
+        return _finalize_entry(e)
+
     e = entry_breaker_retest(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
+        return _finalize_entry(e)
+
     e = entry_ls_bpr(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
+        return _finalize_entry(e)
 
-    # 3. Medium
+    # =========================
+    # 3) Medium
+    # =========================
     e = entry_ote_pullback(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
-    
-    # 4. SMT & Simple
+        return _finalize_entry(e)
+
+    # =========================
+    # 4) SMT & Simple
+    # =========================
     if df_pair is not None:
         e = entry_smt_mss_ifvg(df_htf, df_pair)
         if e:
-            if return_artifacts:
-                e = dict(e)
-                e["_ctx"] = {
-                    "fvgs": detect_fvg_zones(df_htf),
-                    "obs": detect_order_blocks(df_htf),
-                    "sweep": detect_liquidity_sweep(df_htf),
-                }
-            return e
+            return _finalize_entry(e)
+
         e = entry_smt_mss_bb(df_htf, df_pair)
         if e:
-            if return_artifacts:
-                e = dict(e)
-                e["_ctx"] = {
-                    "fvgs": detect_fvg_zones(df_htf),
-                    "obs": detect_order_blocks(df_htf),
-                    "sweep": detect_liquidity_sweep(df_htf),
-                }
-            return e
-        
+            return _finalize_entry(e)
+
     e = entry_mss_fvg_simple(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
+        return _finalize_entry(e)
+
     e = entry_mss_ob_simple(df_htf)
     if e:
-        if return_artifacts:
-            e = dict(e)
-            e["_ctx"] = {
-                "fvgs": detect_fvg_zones(df_htf),
-                "obs": detect_order_blocks(df_htf),
-                "sweep": detect_liquidity_sweep(df_htf),
-            }
-        return e
+        return _finalize_entry(e)
 
-    # 5. Trend Follow
+    # =========================
+    # 5) Trend Follow (HTF_BOS_LTF_PULLBACK)
+    # =========================
     if df_ltf is not None:
         e = entry_bos_pullback(df_htf, df_ltf)
         if e:
-            if return_artifacts:
-                e = dict(e)
-                e["_ctx"] = {
-                    "fvgs": detect_fvg_zones(df_htf),
-                    "obs": detect_order_blocks(df_htf),
-                    "sweep": detect_liquidity_sweep(df_htf),
-                }
-            return e
+            return _finalize_entry(e)
 
     return None
+
 
 
 ENTRY_SCORES = {

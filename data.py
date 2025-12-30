@@ -195,14 +195,7 @@ def fetch_stock_data(symbol: str, start_str: str, end_str: str, interval: str, m
             
     return pd.DataFrame()
 
-def load_data_with_cache(
-    symbol,
-    days_to_load: int = 365,
-    timeframe: str = '1D',
-    end_date=None,
-    compute_indicators: bool = False,
-    allow_fetch: bool = True,
-):
+def load_data_with_cache(symbol, days_to_load=365, timeframe='1D', end_date=None, *, allow_fetch: bool = True, compute_indicators: bool = True):
     """Smart loader (cache-first, fill-gap).
 
     - Reads Parquet cache first.

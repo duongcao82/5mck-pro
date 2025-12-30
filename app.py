@@ -103,7 +103,7 @@ def init_modules():
         ensure_smc_columns, compute_smc_levels, detect_fvg_zones,
         detect_order_blocks, detect_trendlines, detect_confluence_zones
     )
-    from scanner import scan_symbol, process_and_send_vnindex_report, export_journal, format_scan_report
+    from scanner import scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report
     from indicators import detect_rsi_divergence
     from pipeline_manager import run_bulk_update
     import smc_core 
@@ -114,7 +114,7 @@ def init_modules():
         get_vnallshare_universe, load_data_with_cache, load_smart_money_data,
         plot_single_timeframe, plot_smart_money,
         ensure_smc_columns, compute_smc_levels, detect_fvg_zones, detect_order_blocks, detect_trendlines, detect_confluence_zones,
-        scan_symbol, process_and_send_vnindex_report, export_journal, format_scan_report,
+        scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report,
         detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg
     )
 
@@ -145,7 +145,7 @@ vars_loaded = st.session_state.vars_loaded
     get_vnallshare_universe, load_data_with_cache, load_smart_money_data,
     plot_single_timeframe, plot_smart_money,
     ensure_smc_columns, compute_smc_levels, detect_fvg_zones, detect_order_blocks, detect_trendlines, detect_confluence_zones,
-    scan_symbol, process_and_send_vnindex_report, export_journal, format_scan_report,
+    scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report,
     detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg
 ) = vars_loaded
 
@@ -383,36 +383,44 @@ with c_btn2:
         if not scan_symbols: st.error("List trống!")
         else:
             st.session_state.scan_results = None
-            def process_single_symbol(sym):
-                try:
-                    scan_res, reason = scan_symbol(sym, days=60, ema_span=50, nav=input_nav, risk_pct=input_risk, max_positions=input_max_pos)
-                    return sym, scan_res, reason
-                except Exception as e: return sym, None, str(e)
-
-            results = []; rejected = []
-            progress = st.progress(0); status_txt = st.empty()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {executor.submit(process_single_symbol, sym): sym for sym in scan_symbols}
-                total = len(scan_symbols)
-                for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                    sym, res, reason = future.result()
-                    if res: results.append(res)
-                    else: rejected.append((sym, reason))
-                    progress.progress((i + 1) / total)
-                    status_txt.text(f"Scanning: {sym}")
-
-            progress.empty(); status_txt.empty()
-            if results:
-                df_res = pd.DataFrame(results)
-                df_res.sort_values(by=["Signal", "Score", "Symbol"], ascending=[True, False, True], inplace=True)
-                st.session_state.scan_results = df_res
-                st.success(f"Found {len(df_res)} setups!")
-            else:
-                st.warning("No setup found.")
             
-            if auto_send_tele and st.session_state.get("scan_results") is not None:
-                msg = format_scan_report(st.session_state.scan_results)
-                if not msg.startswith("⚠️"): send_telegram_msg(msg)
+shortlist_n = st.slider("Shortlist (Phase 2)", 20, 120, 60, 5)
+
+with st.status("🔎 Scanning 2-phase (D1 → 1H/15m)...", expanded=True) as status:
+    try:
+        results, rejected = scan_universe_two_phase(
+            scan_symbols,
+            days=60,
+            ema_span=50,
+            nav=input_nav,
+            risk_pct=input_risk,
+            max_positions=input_max_pos,
+            shortlist_n=shortlist_n,
+            max_workers_phase1=16,
+            max_workers_phase2=6,
+        )
+        status.update(label="✅ Scan xong!", state="complete", expanded=False)
+    except Exception as e:
+        status.update(label="❌ Scan lỗi", state="error", expanded=True)
+        st.exception(e)
+        results, rejected = [], []
+
+if results:
+    df_res = pd.DataFrame(results)
+    df_res.sort_values(by=["Signal", "Score", "Symbol"], ascending=[True, False, True], inplace=True)
+    st.session_state.scan_results = df_res
+    st.success(f"Found {len(df_res)} setups! (shortlist={shortlist_n})")
+else:
+    st.warning("No setup found.")
+
+if rejected:
+    with st.expander(f"🧾 Rejected ({len(rejected)})", expanded=False):
+        st.dataframe(pd.DataFrame(rejected), hide_index=True)
+
+if auto_send_tele and st.session_state.get("scan_results") is not None:
+    msg = format_scan_report(st.session_state.scan_results)
+    if not msg.startswith("⚠️"):
+        send_telegram_msg(msg)
 
 # HIỂN THỊ KẾT QUẢ
 if st.session_state.get("scan_results") is not None and not st.session_state.scan_results.empty:

@@ -91,22 +91,16 @@ def strategy_smart_timeframe(symbol, d1_side, df_htf=None, end_date=None):
     refined_entry = None
     refined_sl = None
 
-    # Avoid extra DataFrame copies: caller may already copy once.
-    df_htf = ensure_smc_columns(df_htf, copy=False) if df_htf is not None and not df_htf.empty else None
+    df_htf = ensure_smc_columns(df_htf) if df_htf is not None and not df_htf.empty else None
 
     try:
         tf = "1H" if current_hour < 11 else "15m"
         days = 20 if current_hour < 11 else 5
 
-        # Scanner/live path should NEVER trigger API fetch: only read cache.
-        # Tail size: approximate bars/day to keep file IO small
-        bars_per_day = {"1H": 7, "15m": 28}
-        tail_n = max(120, int(days) * bars_per_day.get(tf, 28) + 50)
-        df_ltf_raw = read_cache_fast(symbol, timeframe=tf, tail_n=tail_n, end_date=end_date)
+        df_ltf_raw = load_data_with_cache(symbol, days_to_load=days, timeframe=tf, end_date=end_date)
 
         if df_ltf_raw is not None and not df_ltf_raw.empty:
-            # Copy once then operate in-place downstream
-            df_ltf = ensure_smc_columns(df_ltf_raw.copy(), copy=False)
+            df_ltf = ensure_smc_columns(df_ltf_raw)
 
             # 1) KIỂM TRA SMC MODEL TRÊN KHUNG NHỎ
             entry_ltf = detect_entry_models(df_htf=df_htf, df_ltf=df_ltf) if df_htf is not None else None
@@ -177,13 +171,11 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
 
     try:
         # 1) Tải D1
-        # D1 scan: read-only cache (no API, no indicators) -> unlock speed
-        df_d1 = read_cache_fast(symbol, timeframe="1D", tail_n=max(260, int(days)))
+        df_d1 = load_data_with_cache(symbol, days_to_load=days, timeframe="1D")
         if df_d1 is None or len(df_d1) < 60:
             return _ret(None, "Dữ liệu thiếu")
 
-        # Copy once then operate in-place
-        df_d1 = ensure_smc_columns(df_d1.copy(), copy=False)
+        df_d1 = ensure_smc_columns(df_d1)
         last_row = df_d1.iloc[-1]
         close = float(last_row["Close"])
 
@@ -199,7 +191,7 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
         # 4) Nhận diện tín hiệu (ưu tiên SMC, không có mới PA)
         side, d1_pattern, zone = "NEUTRAL", "None", None
 
-        entry = detect_entry_models(df_htf=df_d1, return_artifacts=True)
+        entry = detect_entry_models(df_htf=df_d1)
         if entry and entry.get("entry") != "NEUTRAL":
             side = entry.get("entry")
             d1_pattern = f"SMC: {entry.get('model')}"
@@ -249,19 +241,11 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
         if risk <= 0:
             return _ret(None, "Risk invalid")
 
-        # 7) TP levels theo SMC (reuse artifacts if already computed)
-        ctx = (entry or {}).get("_ctx") if isinstance(entry, dict) else None
-        if ctx is None:
-            from smc_core import detect_fvg_zones, detect_order_blocks, detect_liquidity_sweep
-            ctx = {
-                "fvgs": detect_fvg_zones(df_d1),
-                "obs": detect_order_blocks(df_d1),
-                "sweep": detect_liquidity_sweep(df_d1),
-            }
-
-        fvgs = ctx.get("fvgs", [])
-        obs = ctx.get("obs", [])
-        sweep_data = ctx.get("sweep", None)
+        # 7) TP levels theo SMC
+        from smc_core import detect_fvg_zones, detect_order_blocks, detect_liquidity_sweep
+        fvgs = detect_fvg_zones(df_d1)
+        obs = detect_order_blocks(df_d1)
+        sweep_data = detect_liquidity_sweep(df_d1)
 
         tp_levels = []
         if side == "BUY":
@@ -350,6 +334,146 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
 
     except Exception as e:
         return _ret(None, str(e))
+
+
+
+# ==============================================================================
+# TWO-PHASE UNIVERSE SCAN (D1 shortlist -> run full scan_symbol on shortlist)
+# ==============================================================================
+def _scan_d1_only_candidate(symbol: str, days: int = 60, ema_span: int = 50):
+    """Phase 1 (D1 only, cache-only). Return (candidate_dict, reason)."""
+    def _ret(res, reason): 
+        return (res, reason)
+
+    try:
+        df_d1 = read_cache_fast(symbol, timeframe="1D", tail_n=max(260, int(days) + 80))
+        if df_d1 is None or df_d1.empty or len(df_d1) < 60:
+            return _ret(None, "D1 cache thiếu")
+
+        df_d1 = ensure_smc_columns(df_d1)  # D1 only; ok
+        last = df_d1.iloc[-1]
+        close = float(last["Close"])
+
+        # Liquidity filter (same spirit as scan_symbol)
+        vol_avg_5 = float(df_d1["Volume"].tail(5).mean())
+        if vol_avg_5 <= 0:
+            return _ret(None, "Vol=0")
+
+        # EMA50
+        ema50 = float(ema(df_d1["Close"], ema_span).iloc[-1])
+
+        # D1 entry model / PA fallback (same as scan_symbol)
+        side, d1_pattern, zone = "NEUTRAL", "None", None
+        entry = detect_entry_models(df_htf=df_d1)
+        if entry and entry.get("entry") != "NEUTRAL":
+            side = entry.get("entry")
+            d1_pattern = f"SMC: {entry.get('model')}"
+            zone = entry.get("zone")
+
+        if side == "NEUTRAL":
+            df_pa = detect_price_action(df_d1.copy())
+            for s in ["BUY", "SELL"]:
+                has_pa, name, pa_sl = check_candlestick_signal(df_pa, s)
+                if has_pa:
+                    side, d1_pattern = s, name
+                    zone = {"y0": pa_sl, "y1": close} if s == "BUY" else {"y0": close, "y1": pa_sl}
+                    break
+
+        if side == "NEUTRAL":
+            return _ret(None, "D1 No Setup")
+
+        # EMA50 filter (same as scan_symbol)
+        if side == "BUY" and close <= (ema50 * 0.97):
+            return _ret(None, "Trend EMA50 (Too Weak)")
+        if side == "SELL" and close >= (ema50 * 1.03):
+            return _ret(None, "Trend EMA50 (Too Strong)")
+
+        # ranking score: prioritize SMC, then distance-to-EMA strength
+        is_smc = 1 if str(d1_pattern).startswith("SMC") else 0
+        trend_strength = abs(close - ema50) / max(1e-9, ema50) if ema50 else 0.0
+        rank = (is_smc * 10.0) + trend_strength
+
+        cand = {
+            "Symbol": symbol,
+            "Signal": side,
+            "d1_pattern": d1_pattern,
+            "zone": zone,
+            "ema50": ema50,
+            "close": close,
+            "rank": rank,
+        }
+        return _ret(cand, "OK")
+    except Exception as e:
+        return _ret(None, str(e))
+
+
+def scan_universe_two_phase(
+    symbols,
+    *,
+    days=60,
+    ema_span=50,
+    nav=1e9,
+    risk_pct=0.01,
+    max_positions=5,
+    shortlist_n=60,
+    max_workers_phase1=16,
+    max_workers_phase2=6,
+):
+    """
+    Two-phase scan:
+    - Phase 1: D1-only (cache-only) -> shortlist
+    - Phase 2: run full scan_symbol() on shortlist (includes 1H/15m confirm)
+
+    Returns:
+      results: list[dict] (same schema as scan_symbol)
+      rejects: list[dict] {Symbol, Phase, Reason}
+    """
+    symbols = list(symbols or [])
+    rejects = []
+    cands = []
+
+    import concurrent.futures
+
+    # -------- Phase 1 --------
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_phase1) as ex:
+        futs = {ex.submit(_scan_d1_only_candidate, sym, days, ema_span): sym for sym in symbols}
+        for fut in concurrent.futures.as_completed(futs):
+            sym = futs[fut]
+            try:
+                cand, reason = fut.result()
+            except Exception as e:
+                cand, reason = None, str(e)
+
+            if cand is None:
+                rejects.append({"Symbol": sym, "Phase": 1, "Reason": reason})
+            else:
+                cands.append(cand)
+
+    # shortlist
+    cands.sort(key=lambda c: c.get("rank", 0), reverse=True)
+    shortlist = cands[: int(shortlist_n)]
+    shortlist_syms = [c["Symbol"] for c in shortlist]
+
+    # -------- Phase 2 --------
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_phase2) as ex:
+        futs = {ex.submit(scan_symbol, sym, days, ema_span, nav, risk_pct, max_positions): sym for sym in shortlist_syms}
+        for fut in concurrent.futures.as_completed(futs):
+            sym = futs[fut]
+            try:
+                res, reason = fut.result()
+            except Exception as e:
+                res, reason = None, str(e)
+
+            if res is None:
+                rejects.append({"Symbol": sym, "Phase": 2, "Reason": reason})
+            else:
+                results.append(res)
+
+    # sort
+    results.sort(key=lambda x: x.get("Score", 0), reverse=True)
+    return results, rejects
+
 
 
 # =========================
