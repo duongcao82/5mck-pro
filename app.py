@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import streamlit as st
-
+default_str = """ACB, BCM, BID, BVH, CTG, FPT, GAS, GVR, HDB, HPG, MBB, MSN, MWG, PLX, POW, SAB, SHB, SSB, STB, TCB, TPB, VCB, VHM, VIC, VNM, VPB, VRE, LPB, DGC, OCB"""
 # ==============================================================================
 # 1. SETUP CƠ BẢN & UI SKELETON (CHẠY NGAY LẬP TỨC)
 # ==============================================================================
@@ -28,56 +28,51 @@ st.markdown(
 if "current_symbol" not in st.session_state:
     st.session_state.current_symbol = "VNINDEX"
 
-# --- B. VẼ SIDEBAR (Dùng thư viện chuẩn, chưa cần Pandas/Vnstock) ---
+# --- B. VẼ SIDEBAR TINH GỌN ---
 st.sidebar.empty()
 current_dir = os.path.dirname(os.path.abspath(__file__))
-img_logo = os.path.join(current_dir, "5MCK_Logo.png")
-img_bidv = os.path.join(current_dir, "5MCK_BIDV.png")
+
+# 1. LOGO: Chỉ hiển thị VPS (Tiết kiệm diện tích)
 img_vps = os.path.join(current_dir, "5MCK_VPS.jpg")
-
-if os.path.exists(img_logo):
-    try: st.sidebar.image(img_logo, width="stretch")
-    except: st.sidebar.title("🎛️ 5MCK Control")
+if os.path.exists(img_vps):
+    try: st.sidebar.image(img_vps, width=None, use_container_width=True) # width=None để tự chỉnh
+    except: st.sidebar.title("🎛️ 5MCK Pro")
 else:
-    st.sidebar.title("🎛️ 5MCK Control")
+    st.sidebar.title("🎛️ 5MCK Pro")
 
-st.sidebar.write("")
-col_logo1, col_logo2 = st.sidebar.columns(2)
-with col_logo1:
-    if os.path.exists(img_bidv):
-        try: st.sidebar.image(img_bidv, width="stretch")
-        except: pass
-with col_logo2:
-    if os.path.exists(img_vps):
-        try: st.sidebar.image(img_vps, width="stretch")
-        except: pass
+# 2. INPUT MÃ & NÚT BC
+c_search, c_btn = st.sidebar.columns([2, 1])
+with c_search:
+    symbol_input = st.text_input("🔍 Mã:", value=st.session_state.current_symbol, label_visibility="collapsed").upper()
+with c_btn:
+    btn_vnindex = st.button("📢 BC", help="Báo cáo VNINDEX") # Nút nhỏ gọn
 
-st.sidebar.markdown("---")
-
-# INPUT CƠ BẢN
-symbol_input = st.sidebar.text_input("🔍 Tra cứu Mã:", value=st.session_state.current_symbol).upper()
 if symbol_input != st.session_state.current_symbol:
     st.session_state.current_symbol = symbol_input
     st.rerun()
 
-# CÁC NÚT ĐIỀU KHIỂN (Vẫn vẽ được dù chưa có logic xử lý)
 st.sidebar.markdown("---")
-btn_vnindex = st.sidebar.button("📢 BC VNINDEX")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("💰 SMC Money Management")
-input_nav = st.sidebar.number_input("Tổng vốn (NAV)", value=1_000_000_000, step=100_000_000)
-input_risk = st.sidebar.slider("Rủi ro mỗi lệnh (%)", 0.1, 5.0, 1.0) / 100
-input_max_pos = st.sidebar.number_input("Số lệnh tối đa", value=5, step=1)
+# 3. CẤU HÌNH CHART (Chia 2 cột để gọn trong 1 khung hình)
+st.sidebar.caption("⚙️ Cấu hình hiển thị")
+col_cfg1, col_cfg2 = st.sidebar.columns(2)
 
-st.sidebar.subheader("⚙️ Cấu hình Chart")
-use_ma = st.sidebar.checkbox("MAs", value=False)
-use_vsa = st.sidebar.checkbox("VSA Signals", value=False)
-use_rsi = st.sidebar.checkbox("RSI", value=True)
-use_smc = st.sidebar.checkbox("SMC Zones", value=True)
-use_vol = st.sidebar.checkbox("Volume", value=True)
-use_trendline = st.sidebar.checkbox("Trendlines", value=True)
-use_smart_money = st.sidebar.checkbox("💰 Smart Money", value=False)
+with col_cfg1:
+    use_ma = st.checkbox("MAs", value=False)
+    use_rsi = st.checkbox("RSI", value=True)
+    use_vol = st.checkbox("Vol", value=True)
+    use_smart_money = st.checkbox("S.Money", value=False)
+
+with col_cfg2:
+    use_vsa = st.checkbox("VSA", value=False)
+    use_smc = st.checkbox("SMC", value=True)
+    use_trendline = st.checkbox("Trend", value=True)
+
+# 4. MONEY MANAGEMENT (Dùng Expander để ẩn đi cho gọn)
+with st.sidebar.expander("💰 Quản lý vốn (NAV)", expanded=False):
+    input_nav = st.number_input("Vốn (NAV)", value=1_000_000_000, step=100_000_000)
+    input_risk = st.slider("Risk %", 0.5, 5.0, 1.0) / 100
+    input_max_pos = st.number_input("Max Pos", value=4)
 
 
 # ==============================================================================
@@ -276,7 +271,7 @@ if df_1d is not None and not df_1d.empty:
                 enable_smart_money=use_smart_money, build_fig=True,
             )
             st.session_state.d1_zones = d1_zones
-        if fig_d1: st.plotly_chart(fig_d1, use_container_width=True, config=plotly_draw_config())
+        if fig_d1: st.plotly_chart(fig_d1, width='stretch', config=plotly_draw_config())
 
     elif tf_choice == "Hourly (1H)":
         if not st.session_state.d1_zones:
@@ -291,7 +286,7 @@ if df_1d is not None and not df_1d.empty:
                     skip_current_zones=False, enable_smart_money=use_smart_money, build_fig=True,
                 )
                 st.session_state.h1_zones = h1_zones
-            if fig_h1: st.plotly_chart(fig_h1, use_container_width=True, config=plotly_draw_config())
+            if fig_h1: st.plotly_chart(fig_h1, width='stretch', config=plotly_draw_config())
         else: st.warning("Chưa có data 1H.")
 
     else:
@@ -315,161 +310,326 @@ if df_1d is not None and not df_1d.empty:
                     show_vsa_param=False, htf_zones=final_htf, skip_current_zones=True,
                     enable_smart_money=use_smart_money, build_fig=True,
                 )
-            if fig_15: st.plotly_chart(fig_15, use_container_width=True, config=plotly_draw_config())
+            if fig_15: st.plotly_chart(fig_15, width='stretch', config=plotly_draw_config())
         else: st.warning("Chưa có data 15m.")
 else:
     st.error(f"⚠️ Chưa có dữ liệu {symbol}.")
 
 
+# ============================================================================
 # ==============================================================================
-# 6. SMC SCANNER
+# 6. SMC SCANNER (Dashboard 2 cột)
 # ==============================================================================
 st.markdown("---")
 st.subheader("🚀 SMC Scanner")
 
-default_str = """ACB, AGR, ANV, BAF, BCM, BID, BMP, BSI, BVH, CII, CTD, CTG, CTR, CTS, DBC, DCL, DCM, DGC, DGW, DHA, DIG, DPG, DPM, DXG, EIB, ELC, EVF, FCN, FPT, FRT, FTS, GAS, GEX, GMD, GVR, HAG, HAH, HCM, HDB, HDC, HDG, HHS, HHV, HPG, HSG, IJC, KBC, KDC, KDH, KOS, KSB, LCG, LPB, MBB, MSB, MSN, MWG, NAB, NAF, NKG, NLG, NT2, NTL, OCB, ORS, PAN, PC1, PDR, PET, PHR, PLX, PNJ, POW, PVD, PVT, QCG, REE, SAB, SBT, SCS, SHB, SHI, SIP, SSB, SSI, STB, TCB, TCH, TCM, TLG, TPB, VCB, VCG, VCI, VDS, VGC, VHC, VHM, VIB, VIC, VIX, VJC, VND, VNM, VPB, VPI, VRE, VSC, VTP, YEG"""
+# ---------- CSS: Dark + Accent theo Signal ----------
+st.markdown("""
+<style>
+.block-container {padding-top: 1.1rem;}
+.card{
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  padding: 14px 14px;
+}
+.badge{
+  display:inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border:1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  font-size: 0.78rem;
+  opacity:0.92;
+}
+.hint{opacity:0.78; font-size: 0.86rem; margin-top: 2px;}
+/* Primary button tint */
+div.stButton > button[kind="primary"]{
+  background: linear-gradient(90deg, rgba(239,68,68,0.95), rgba(249,115,22,0.95));
+  border: 0px;
+}
+div.stButton > button[kind="primary"]:hover{
+  filter: brightness(1.05);
+}
+/* Signal styles in dataframe */
+td.signal-buy {color:#22C55E !important; font-weight:800;}
+td.signal-sell {color:#F87171 !important; font-weight:800;}
+</style>
+""", unsafe_allow_html=True)
 
+# ---------- Session state ----------
 if "scan_symbols_text" not in st.session_state:
     st.session_state.scan_symbols_text = default_str
+if "cache_ready" not in st.session_state:
+    st.session_state.cache_ready = False
+if "last_cache_update" not in st.session_state:
+    st.session_state.last_cache_update = None
+if "scan_rejected" not in st.session_state:
+    st.session_state.scan_rejected = []
 
-col_u1, col_u2 = st.columns([1, 3])
-with col_u1:
-    if st.button("🌍 Load VN-Universe"):
-        with st.spinner("Đang lọc Universe..."):
+# Parse symbols helper
+def _parse_symbols(txt: str):
+    raw = (txt or "").replace("\n", " ").replace(",", " ").replace(";", " ")
+    return [s.strip().upper() for s in raw.split() if s.strip()]
+
+# ---------- Sidebar Control Panel (ĐÃ TỐI ƯU GỌN NHẸ) ----------
+with st.sidebar:
+    st.markdown("## ⚙️ Control Panel")
+    
+    # CSS nhỏ để giảm khoảng cách giữa các phần tử trong Sidebar
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] .stButton {margin-bottom: 0px;}
+        .card {margin-bottom: 10px; padding: 10px;} /* Giảm margin card */
+        </style>
+    """, unsafe_allow_html=True)
+
+    # --- 1. Load Universe (Chỉ còn đúng 1 nút bấm nằm trong card) ---
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    if st.button("🌍1.Load Universe", width='stretch'):
+        with st.spinner("Loading..."):
             try:
                 uni_list = get_vnallshare_universe(days=20)
                 if uni_list:
                     st.session_state.scan_symbols_text = ", ".join(uni_list)
-                    st.success(f"Load {len(uni_list)} mã!")
-                    time.sleep(1)
-                    st.rerun()
-            except Exception as e: st.error(str(e))
+                    st.session_state.cache_ready = False
+                    st.success(f"OK: {len(uni_list)} mã")
+            except Exception as e: st.error("Lỗi mạng")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-with col_u2:
-    st.info("Universe: Các mã thanh khoản cao lọc từ VNALLSHARE.")
+    # --- 2. Update Cache (Gọn nhẹ) ---
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    scan_symbols_sidebar = _parse_symbols(st.session_state.scan_symbols_text)
+    if st.button("📥2.Update Cache", width='stretch'):
+        if not scan_symbols_sidebar: st.error("List trống")
+        else:
+            with st.status("Updating...", expanded=True) as status:
+                res = run_bulk_update(scan_symbols_sidebar, days_back=3)
+                if "Lỗi" not in res:
+                    status.update(label="Done!", state="complete", expanded=False)
+                    st.session_state.cache_ready = True
+                    st.session_state.last_cache_update = datetime.now().strftime("%H:%M")
+                    st.toast("Updated!", icon="💾")
+                else: st.error(res)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-scan_list_input = st.text_area("List Scan:", value=st.session_state.scan_symbols_text, height=100)
-if scan_list_input != st.session_state.scan_symbols_text:
-    st.session_state.scan_symbols_text = scan_list_input
+    # --- 3. Start Scan (Tinh gọn nhất) ---
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    
+    # Gom Slider và Checkbox vào 2 cột cho tiết kiệm dòng
+    c1, c2 = st.columns([2, 1.5]) 
+    with c1:
+        # label_visibility="collapsed" giúp ẩn chữ "Shortlist" đi nếu muốn siêu gọn
+        # hoặc giữ "visible" nhưng chỉnh margin
+        shortlist_n = st.slider("Top", 20, 100, 60, 10, help="Số lượng mã lọc phase 1")
+    with c2:
+        auto_send_tele = st.checkbox("Tele", value=False)
 
-raw_symbols = scan_list_input.replace("\n", " ").replace(",", " ").replace(";", " ")
-scan_symbols = [s.strip().upper() for s in raw_symbols.split(" ") if s.strip()]
+    start_disabled = not st.session_state.get("cache_ready", False)
+    # Nút Scan
+    # Nút Scan (Gán vào biến start_scan để bên dưới dùng được)
+    start_scan = st.button("🔥3.SCAN", type="primary", width='stretch', disabled=start_disabled)
+        # Logic Scan được xử lý ở main dashboard, nút này chỉ trigger rerun 
+        # (Thực tế code cũ nút này nằm trong form hoặc biến start_scan sẽ được dùng ở dưới)
+        #pass 
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------- Main: Dashboard (Top: Results, Bottom: Chart) ----------
+# Top: List/Filters/Results
+with st.expander("🧾 List Scan", expanded=False):
+    scan_list_input = st.text_area("List Scan", value=st.session_state.scan_symbols_text, height=110)
+    if scan_list_input != st.session_state.scan_symbols_text:
+        st.session_state.scan_symbols_text = scan_list_input
+        st.session_state.cache_ready = False
 
 issues = core_healthcheck_ui()
-if issues: st.warning(f"Core Check: {issues}")
-
-c_btn1, c_btn2 = st.columns(2)
-with c_btn1:
-    st.write("1️⃣ **Bước 1: Update Cache**")
-    if st.button("📥 Cập nhật Dữ liệu", width="stretch"):
-        if not scan_symbols: st.error("List trống!")
-        else:
-            with st.status("⏳ Đang tải dữ liệu...", expanded=True) as status:
-                # Gọi hàm từ pipeline_manager
-                res = run_bulk_update(scan_symbols, days_back=3)
-                if "Lỗi" not in res:
-                    status.update(label="✅ Đã cập nhật Cache!", state="complete", expanded=False)
-                    st.toast("Done!", icon="💾")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    status.update(label="❌ Lỗi", state="error")
-                    st.error(res)
-
-with c_btn2:
-    st.write("2️⃣ **Bước 2: Tìm cơ hội**")
-    auto_send_tele = st.checkbox("Auto Telegram", value=False)
-    if st.button("🔥 Start Scan", type="primary", width="stretch"):
-        if not scan_symbols: st.error("List trống!")
-        else:
-            st.session_state.scan_results = None
-            
-shortlist_n = st.slider("Shortlist (Phase 2)", 20, 120, 60, 5)
-
-with st.status("🔎 Scanning 2-phase (D1 → 1H/15m)...", expanded=True) as status:
-    try:
-        results, rejected = scan_universe_two_phase(
-            scan_symbols,
-            days=60,
-            ema_span=50,
-            nav=input_nav,
-            risk_pct=input_risk,
-            max_positions=input_max_pos,
-            shortlist_n=shortlist_n,
-            max_workers_phase1=16,
-            max_workers_phase2=6,
-        )
-        status.update(label="✅ Scan xong!", state="complete", expanded=False)
-    except Exception as e:
-        status.update(label="❌ Scan lỗi", state="error", expanded=True)
-        st.exception(e)
-        results, rejected = [], []
-
-if results:
-    df_res = pd.DataFrame(results)
-    df_res.sort_values(by=["Signal", "Score", "Symbol"], ascending=[True, False, True], inplace=True)
-    st.session_state.scan_results = df_res
-    st.success(f"Found {len(df_res)} setups! (shortlist={shortlist_n})")
+if issues:
+    st.warning(f"Core Check: {issues}")
 else:
-    st.warning("No setup found.")
+    st.success("Core OK ✅")
 
-if rejected:
-    with st.expander(f"🧾 Rejected ({len(rejected)})", expanded=False):
-        st.dataframe(pd.DataFrame(rejected), hide_index=True)
+st.markdown("### 🔎 Filters")
+f1, f2, f3 = st.columns([1,1,1])
+with f1:
+    signal_filter = st.selectbox("Signal", ["ALL", "BUY", "SELL"], index=0)
+with f2:
+    min_score = st.number_input("Score >=", value=0.0, step=0.5)
+with f3:
+    sector_filter = st.selectbox("Sector", ["ALL"], index=0, disabled=True, help="Chưa có cột Sector trong dữ liệu")
 
-if auto_send_tele and st.session_state.get("scan_results") is not None:
-    msg = format_scan_report(st.session_state.scan_results)
-    if not msg.startswith("⚠️"):
-        send_telegram_msg(msg)
+# Run scan when clicked
+if start_scan:
+    st.session_state.scan_results = None
+    st.session_state.scan_rejected = []
 
-# HIỂN THỊ KẾT QUẢ
+    scan_symbols = _parse_symbols(st.session_state.scan_symbols_text)
+
+    with st.status("🔎 Scanning 2-phase (D1 → 1H/15m)...", expanded=True) as status:
+        try:
+            results, rejected = scan_universe_two_phase(
+                scan_symbols,
+                days=60,
+                ema_span=50,
+                nav=input_nav,
+                risk_pct=input_risk,
+                max_positions=input_max_pos,
+                shortlist_n=shortlist_n,
+                max_workers_phase1=16,
+                max_workers_phase2=10,
+            )
+            st.session_state.scan_rejected = rejected
+
+            if results:
+                df_res = pd.DataFrame(results)
+                df_res.sort_values(
+                    by=["Signal", "Score", "Symbol"],
+                    ascending=[True, False, True],
+                    inplace=True
+                )
+                st.session_state.scan_results = df_res
+                status.update(
+                    label=f"✅ Found {len(df_res)} setups!",
+                    state="complete",
+                    expanded=False
+                )
+            else:
+                status.update(
+                    label="⚠️ No setup found.",
+                    state="complete",
+                    expanded=False
+                )
+
+        except Exception as e:
+            status.update(label="❌ Scan lỗi", state="error", expanded=True)
+            st.exception(e)
+
+    # ✅ GỬI TELEGRAM – ĐẶT NGOÀI TRY/EXCEPT
+    if auto_send_tele and st.session_state.get("scan_results") is not None:
+        msg = format_scan_report(st.session_state.scan_results)
+        if not msg.startswith("⚠️"):
+            send_telegram_msg(msg)
+
+
+# Results table
 if st.session_state.get("scan_results") is not None and not st.session_state.scan_results.empty:
-    st.markdown("---")
-    st.subheader("📋 Kết quả")
-    
-    if st.button("📒 Export Journal"):
-        df_j = export_journal(st.session_state.scan_results)
-        if df_j is not None: st.dataframe(df_j, hide_index=True)
-
     df_res = st.session_state.scan_results.copy()
-    
+
+    # Sector dropdown nếu có
+    if "Sector" in df_res.columns:
+        sectors = ["ALL"] + sorted([s for s in df_res["Sector"].dropna().unique().tolist() if str(s).strip()])
+        sector_filter = st.selectbox("Sector", sectors, index=0)
+
+    # Apply filters
+    dff = df_res.copy()
+    if signal_filter != "ALL":
+        dff = dff[dff["Signal"].astype(str).str.contains(signal_filter)]
+    try:
+        dff = dff[dff["Score"].astype(float) >= float(min_score)]
+    except Exception:
+        pass
+    if "Sector" in dff.columns and sector_filter != "ALL":
+        dff = dff[dff["Sector"] == sector_filter]
+
+    # KPI
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Setups", len(dff))
+    k2.metric("BUY", int(dff["Signal"].astype(str).str.contains("BUY").sum()))
+    k3.metric("SELL", int(dff["Signal"].astype(str).str.contains("SELL").sum()))
+    try:
+        k4.metric("Avg Score", round(float(dff["Score"].astype(float).mean()), 2))
+    except Exception:
+        k4.metric("Avg Score", "-")
+
+    # Export
+    b1, b2 = st.columns([1,1])
+    with b1:
+        if st.button("📒 Export Journal", width='stretch'):
+            df_j = export_journal(dff)
+            if df_j is not None:
+                st.dataframe(df_j, hide_index=True, width='stretch')
+    with b2:
+        if st.button("📤 Gửi Tele", width='stretch'):
+            msg = format_scan_report(dff)
+            send_telegram_msg(msg)
+            st.toast("Sent!")
+
+    # --- STYLE FUNCTIONS (ĐÃ THÊM MỚI TẠI ĐÂY) ---
     def format_score_ui(val):
         try: v = float(val)
         except: v = 0.0
         if v >= 4.0: return f"🔥🔥 {v}"
         if v >= 3.0: return f"⭐ {v}"
         return str(v)
-    df_res["Display_Score"] = df_res["Score"].apply(format_score_ui)
+
+    dff["Display_Score"] = dff["Score"].apply(format_score_ui)
 
     def _style_signal(val):
-        if "BUY" in str(val): return "color: #22C55E; font-weight: bold"
-        if "SELL" in str(val): return "color: #F87171; font-weight: bold"
+        sval = str(val)
+        if "BUY" in sval: return "color:#22C55E; font-weight:800"
+        if "SELL" in sval: return "color:#F87171; font-weight:800"
         return ""
 
+    # === LOGIC TÔ MÀU CHỮ DIST% ===
+    def _style_dist_poi(val):
+        try:
+            v = float(val)
+            abs_v = abs(v)
+            # Từ -2% đến 2%: Màu Xanh
+            if abs_v <= 2.0: 
+                return "color: #00E676; font-weight: 700" 
+            
+            # Từ 2% đến 5% (hoặc -5% đến -2%): Màu Vàng
+            if 2.0 < abs_v <= 5.0: 
+                return "color: #FFD700; font-weight: 700" 
+            
+            # Còn lại (Xa hơn 5%): Màu Trắng (Mặc định)
+            return "" 
+        except Exception: 
+            return ""
+
+    st.markdown("### 📋 Results")
+    
+    # ÁP DỤNG STYLE MAP
     event = st.dataframe(
-        df_res.style.map(_style_signal, subset=["Signal"]),
-        width="stretch", hide_index=True,
-        column_order=["Symbol", "Signal", "Display_Score", "Dist_POI", "Price", "POI_D1", "KL", "SL", "TP", "Note"],
+        dff.style.map(_style_signal, subset=["Signal"])
+                 .map(_style_dist_poi, subset=["Dist_POI"]), # <--- ĐÃ THÊM DÒNG NÀY
+        width='stretch',
+        hide_index=True,
+        column_order=[c for c in ["Symbol","Signal","Display_Score","Dist_POI","Price","POI_D1","KL","SL","TP","Note","Sector"] if c in dff.columns],
         column_config={
             "Dist_POI": st.column_config.NumberColumn("Dist%", format="%.2f%%"),
             "Price": st.column_config.NumberColumn("Price", format="%.2f"),
             "POI_D1": st.column_config.NumberColumn("POI", format="%.2f"),
             "SL": st.column_config.NumberColumn("SL", format="%.2f"),
         },
-        on_select="rerun", selection_mode="single-row"
+        on_select="rerun",
+        selection_mode="single-row"
     )
 
     if len(event.selection.rows) > 0:
         sel_idx = event.selection.rows[0]
-        st.session_state.current_symbol = df_res.iloc[sel_idx]["Symbol"]
-        st.rerun()
+        new_sym = dff.iloc[sel_idx]["Symbol"]
+        if st.session_state.get("current_symbol") != new_sym:
+            st.session_state.current_symbol = new_sym
 
-    if st.button("📤 Gửi Tele"):
-        msg = format_scan_report(st.session_state.scan_results)
-        send_telegram_msg(msg)
-        st.toast("Sent!")
+else:
+    st.info("Chưa có kết quả. Hãy Update Cache → Start Scan.")
 
-# ==============================================================================
+# Rejected log
+if st.session_state.get("scan_rejected"):
+    with st.expander(f"🧨 Rejected ({len(st.session_state.scan_rejected)})", expanded=False):
+        st.dataframe(pd.DataFrame(st.session_state.scan_rejected, columns=["Symbol","Reason"]),
+                     hide_index=True, width='stretch')
+
+
+st.markdown("---")
+
+# Bottom: Chart (full width)  [DISABLED to avoid double-render]
+st.markdown("### 📈 Chart")
+st.caption("📊 Chart đang hiển thị ở Dashboard phía trên. (Click mã trong bảng Results để đổi chart.)")
+
+
+# =============================
 # 7. MINI BOT
 # ==============================================================================
 st.sidebar.markdown("---")

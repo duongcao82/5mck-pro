@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from config import now_vn, TELEGRAM_KILLZONE_ONLY, TELEGRAM_ALERT_SCORE_MIN, KILLZONE_WINDOWS
-from data import load_data_with_cache, read_cache_fast
+from data import load_data_with_cache
+from data import read_cache_fast  # cache-only reader for Phase 1
 from smc_core import (
     ensure_smc_columns,
     detect_entry_models,
@@ -334,146 +335,6 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
 
     except Exception as e:
         return _ret(None, str(e))
-
-
-
-# ==============================================================================
-# TWO-PHASE UNIVERSE SCAN (D1 shortlist -> run full scan_symbol on shortlist)
-# ==============================================================================
-def _scan_d1_only_candidate(symbol: str, days: int = 60, ema_span: int = 50):
-    """Phase 1 (D1 only, cache-only). Return (candidate_dict, reason)."""
-    def _ret(res, reason): 
-        return (res, reason)
-
-    try:
-        df_d1 = read_cache_fast(symbol, timeframe="1D", tail_n=max(260, int(days) + 80))
-        if df_d1 is None or df_d1.empty or len(df_d1) < 60:
-            return _ret(None, "D1 cache thiếu")
-
-        df_d1 = ensure_smc_columns(df_d1)  # D1 only; ok
-        last = df_d1.iloc[-1]
-        close = float(last["Close"])
-
-        # Liquidity filter (same spirit as scan_symbol)
-        vol_avg_5 = float(df_d1["Volume"].tail(5).mean())
-        if vol_avg_5 <= 0:
-            return _ret(None, "Vol=0")
-
-        # EMA50
-        ema50 = float(ema(df_d1["Close"], ema_span).iloc[-1])
-
-        # D1 entry model / PA fallback (same as scan_symbol)
-        side, d1_pattern, zone = "NEUTRAL", "None", None
-        entry = detect_entry_models(df_htf=df_d1)
-        if entry and entry.get("entry") != "NEUTRAL":
-            side = entry.get("entry")
-            d1_pattern = f"SMC: {entry.get('model')}"
-            zone = entry.get("zone")
-
-        if side == "NEUTRAL":
-            df_pa = detect_price_action(df_d1.copy())
-            for s in ["BUY", "SELL"]:
-                has_pa, name, pa_sl = check_candlestick_signal(df_pa, s)
-                if has_pa:
-                    side, d1_pattern = s, name
-                    zone = {"y0": pa_sl, "y1": close} if s == "BUY" else {"y0": close, "y1": pa_sl}
-                    break
-
-        if side == "NEUTRAL":
-            return _ret(None, "D1 No Setup")
-
-        # EMA50 filter (same as scan_symbol)
-        if side == "BUY" and close <= (ema50 * 0.97):
-            return _ret(None, "Trend EMA50 (Too Weak)")
-        if side == "SELL" and close >= (ema50 * 1.03):
-            return _ret(None, "Trend EMA50 (Too Strong)")
-
-        # ranking score: prioritize SMC, then distance-to-EMA strength
-        is_smc = 1 if str(d1_pattern).startswith("SMC") else 0
-        trend_strength = abs(close - ema50) / max(1e-9, ema50) if ema50 else 0.0
-        rank = (is_smc * 10.0) + trend_strength
-
-        cand = {
-            "Symbol": symbol,
-            "Signal": side,
-            "d1_pattern": d1_pattern,
-            "zone": zone,
-            "ema50": ema50,
-            "close": close,
-            "rank": rank,
-        }
-        return _ret(cand, "OK")
-    except Exception as e:
-        return _ret(None, str(e))
-
-
-def scan_universe_two_phase(
-    symbols,
-    *,
-    days=60,
-    ema_span=50,
-    nav=1e9,
-    risk_pct=0.01,
-    max_positions=5,
-    shortlist_n=60,
-    max_workers_phase1=16,
-    max_workers_phase2=6,
-):
-    """
-    Two-phase scan:
-    - Phase 1: D1-only (cache-only) -> shortlist
-    - Phase 2: run full scan_symbol() on shortlist (includes 1H/15m confirm)
-
-    Returns:
-      results: list[dict] (same schema as scan_symbol)
-      rejects: list[dict] {Symbol, Phase, Reason}
-    """
-    symbols = list(symbols or [])
-    rejects = []
-    cands = []
-
-    import concurrent.futures
-
-    # -------- Phase 1 --------
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_phase1) as ex:
-        futs = {ex.submit(_scan_d1_only_candidate, sym, days, ema_span): sym for sym in symbols}
-        for fut in concurrent.futures.as_completed(futs):
-            sym = futs[fut]
-            try:
-                cand, reason = fut.result()
-            except Exception as e:
-                cand, reason = None, str(e)
-
-            if cand is None:
-                rejects.append({"Symbol": sym, "Phase": 1, "Reason": reason})
-            else:
-                cands.append(cand)
-
-    # shortlist
-    cands.sort(key=lambda c: c.get("rank", 0), reverse=True)
-    shortlist = cands[: int(shortlist_n)]
-    shortlist_syms = [c["Symbol"] for c in shortlist]
-
-    # -------- Phase 2 --------
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_phase2) as ex:
-        futs = {ex.submit(scan_symbol, sym, days, ema_span, nav, risk_pct, max_positions): sym for sym in shortlist_syms}
-        for fut in concurrent.futures.as_completed(futs):
-            sym = futs[fut]
-            try:
-                res, reason = fut.result()
-            except Exception as e:
-                res, reason = None, str(e)
-
-            if res is None:
-                rejects.append({"Symbol": sym, "Phase": 2, "Reason": reason})
-            else:
-                results.append(res)
-
-    # sort
-    results.sort(key=lambda x: x.get("Score", 0), reverse=True)
-    return results, rejects
-
 
 
 # =========================
@@ -829,3 +690,122 @@ def export_journal(df_results):
         return None
 
     return pd.DataFrame(rows)
+
+# ==============================================================================
+# 6. TWO-PHASE UNIVERSE SCAN (D1 shortlist -> scan_symbol confirm 1H/15m)
+# ==============================================================================
+
+def _phase1_d1_candidate(symbol: str, days: int = 60, ema_span: int = 50):
+    """
+    Phase 1: D1-only, cache-only.
+    Return: (candidate_dict_or_None, reject_reason)
+    """
+    try:
+        df_d1 = read_cache_fast(symbol, timeframe="1D", tail_n=max(260, days))
+        if df_d1 is None or len(df_d1) < 60:
+            return None, "No D1 cache"
+
+        df_d1 = ensure_smc_columns(df_d1)
+        last_row = df_d1.iloc[-1]
+        close = float(last_row["Close"])
+
+        # Liquidity quick filter (giống scan_symbol nhưng rút gọn)
+        vol_avg_5 = float(df_d1["Volume"].tail(5).mean())
+        if close <= 10 or vol_avg_5 < 100000:
+            return None, "Low liquidity"
+
+        # EMA filter (nhẹ)
+        ema50 = ema(df_d1["Close"], span=ema_span).iloc[-1]
+        if np.isnan(ema50):
+            return None, "EMA nan"
+
+        # Detect entry on HTF (D1)
+        entry = detect_entry_models(df_htf=df_d1, return_artifacts=False)
+        if not entry:
+            return None, "No setup D1"
+
+        side = entry.get("entry")
+        model = entry.get("model", "")
+        poi = entry.get("poi")
+
+        # quick score proxy: distance to EMA + model weight
+        dist_ema = abs(close - float(ema50)) / close if close else 9.0
+        base = 1.0
+        if "SILVER" in str(model).upper(): base += 0.7
+        if "BPR" in str(model).upper(): base += 0.5
+        if "FVG" in str(model).upper(): base += 0.4
+        score_proxy = base + max(0.0, 1.5 - dist_ema * 10.0)
+
+        cand = {
+            "Symbol": symbol,
+            "Signal": side,
+            "ScoreProxy": float(round(score_proxy, 3)),
+            "Price": float(close),
+            "POI_D1": float(poi) if poi is not None else None,
+            "Model": model,
+        }
+        return cand, "OK"
+    except Exception as e:
+        return None, str(e)
+
+
+def scan_universe_two_phase(
+    symbols,
+    days: int = 60,
+    ema_span: int = 50,
+    nav: float = 1e9,
+    risk_pct: float = 0.01,
+    max_positions: int = 5,
+    shortlist_n: int = 60,
+    max_workers_phase1: int = 16,
+    max_workers_phase2: int = 10,
+):
+    """
+    Two-phase scanning:
+      Phase 1: D1-only cache scan to build shortlist
+      Phase 2: run full scan_symbol (D1 + 1H/15m) only on shortlist
+
+    Return: (results_list, rejected_list)
+      - results_list: list[dict] like scan_symbol output
+      - rejected_list: list[(symbol, reason)]
+    """
+    import concurrent.futures
+
+    symbols = [s.strip().upper() for s in symbols if str(s).strip()]
+    rejected = []
+    candidates = []
+
+    # -------- Phase 1 --------
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_phase1) as ex:
+        futs = {ex.submit(_phase1_d1_candidate, sym, days, ema_span): sym for sym in symbols}
+        for fut in concurrent.futures.as_completed(futs):
+            sym = futs[fut]
+            cand, reason = fut.result()
+            if cand:
+                candidates.append(cand)
+            else:
+                rejected.append((sym, f"P1: {reason}"))
+
+    # Sort & shortlist
+    if candidates:
+        candidates.sort(key=lambda x: (str(x.get("Signal","")), -float(x.get("ScoreProxy", 0)), str(x.get("Symbol",""))))
+        shortlist = [c["Symbol"] for c in candidates[:max(1, int(shortlist_n))]]
+    else:
+        return [], rejected
+
+    # -------- Phase 2 --------
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_phase2) as ex:
+        futs = {ex.submit(scan_symbol, sym, days, ema_span, nav, risk_pct, max_positions): sym for sym in shortlist}
+        for fut in concurrent.futures.as_completed(futs):
+            sym = futs[fut]
+            try:
+                res, reason = fut.result()
+            except Exception as e:
+                res, reason = None, str(e)
+            if res:
+                results.append(res)
+            else:
+                rejected.append((sym, f"P2: {reason}"))
+
+    return results, rejected
