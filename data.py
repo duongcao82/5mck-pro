@@ -54,6 +54,71 @@ def calculate_full_indicators(df):
         pass # Bỏ qua lỗi chỉ báo để không sập app
     return df
 
+
+# =========================
+# FAST CACHE READER (SCAN)
+# =========================
+@st.cache_data(show_spinner=False)
+def _read_parquet_tail_cached(path: str, mtime: float, tail_n: int) -> pd.DataFrame:
+    """Read parquet quickly and return only the last N rows.
+
+    - `mtime` is included to invalidate cache when the file changes.
+    - This function is *read-only* and never triggers any API calls.
+    """
+    if not path or not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(path)
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        # Normalize index
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            df.set_index("Date", inplace=True)
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, errors="coerce")
+
+        df = df.sort_index()
+        if tail_n and tail_n > 0:
+            df = df.tail(int(tail_n))
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def read_cache_fast(symbol: str, timeframe: str = "1D", tail_n: int = 300, end_date=None) -> pd.DataFrame:
+    """Fast path for scanner: only read local parquet cache.
+
+    - Never calls API.
+    - Never computes indicators.
+    - Returns only tail_n rows (after optional end_date cut).
+    """
+    symbol = (symbol or "").strip().upper()
+    symbol_clean = "".join([ch for ch in symbol if ch.isalnum()])
+    tf = (timeframe or "1D").strip()
+    file_path = os.path.join(CACHE_DIR, f"{symbol_clean}_{tf}.parquet")
+
+    if not os.path.exists(file_path):
+        return pd.DataFrame()
+
+    try:
+        mtime = os.path.getmtime(file_path)
+    except Exception:
+        mtime = 0.0
+
+    df = _read_parquet_tail_cached(file_path, mtime, int(tail_n) if tail_n else 0)
+    df = _validate_ohlcv_df(df)
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if end_date is not None:
+        try:
+            df = df[df.index <= end_date]
+        except Exception:
+            pass
+    return df
+
 def normalize_columns(df):
     """Chuẩn hóa tên cột về chuẩn chung"""
     if df is None or df.empty: return df
@@ -130,123 +195,133 @@ def fetch_stock_data(symbol: str, start_str: str, end_str: str, interval: str, m
             
     return pd.DataFrame()
 
-def load_data_with_cache(symbol, days_to_load=365, timeframe='1D', end_date=None):
-    """
-    Hàm load dữ liệu thông minh:
-    1. Đọc từ file Parquet (Cache Git) TRƯỚC.
-    2. Chỉ gọi API để lấy phần dữ liệu CÒN THIẾU (Gap).
+def load_data_with_cache(
+    symbol,
+    days_to_load: int = 365,
+    timeframe: str = '1D',
+    end_date=None,
+    compute_indicators: bool = False,
+    allow_fetch: bool = True,
+):
+    """Smart loader (cache-first, fill-gap).
+
+    - Reads Parquet cache first.
+    - Only fetches missing gap when `allow_fetch=True`.
+    - Indicators are optional (scanner should keep this False).
     """
     symbol = (symbol or "").strip().upper()
-    # Làm sạch tên file (bỏ ký tự lạ)
     symbol_clean = "".join([ch for ch in symbol if ch.isalnum()])
-    
-    file_path = os.path.join(CACHE_DIR, f"{symbol_clean}_{timeframe}.parquet")
-    
-    now = now_vn()    
+
+    # Normalize timeframe -> interval for vnstock_data
+    tf = (timeframe or "1D").strip()
+    tf_map = {
+        "1D": "1D", "D": "1D", "DAY": "1D",
+        "1H": "1H", "H": "1H", "60": "1H",
+        "15M": "15m", "15m": "15m", "15": "15m",
+    }
+    interval = tf_map.get(tf, tf)
+    tf_norm = tf  # keep file naming stable with caller
+
+    file_path = os.path.join(CACHE_DIR, f"{symbol_clean}_{tf_norm}.parquet")
+
+    now = now_vn()
     today_date = now.date()
     today_str = today_date.strftime("%Y-%m-%d")
-    
+
     df_old = pd.DataFrame()
     last_cached_date = None
-    
-    # --- BƯỚC 1: ĐỌC CACHE TỪ DISK (CỰC NHANH) ---
+
+    # --- STEP 1: read cache ---
     if os.path.exists(file_path):
         try:
             df_old = pd.read_parquet(file_path)
-            if not df_old.empty:
-                # Đảm bảo index là Datetime
-                if 'Date' in df_old.columns:
-                    df_old['Date'] = pd.to_datetime(df_old['Date'])
-                    df_old.set_index('Date', inplace=True)
+            if df_old is not None and not df_old.empty:
+                if "Date" in df_old.columns:
+                    df_old["Date"] = pd.to_datetime(df_old["Date"], errors="coerce")
+                    df_old.set_index("Date", inplace=True)
                 if not isinstance(df_old.index, pd.DatetimeIndex):
-                     df_old.index = pd.to_datetime(df_old.index)
-                
-                df_old.sort_index(inplace=True)
+                    df_old.index = pd.to_datetime(df_old.index, errors="coerce")
+                df_old = df_old.sort_index()
                 last_cached_date = df_old.index.max()
-        except: 
-            df_old = pd.DataFrame() # File lỗi thì coi như không có
+        except Exception:
+            df_old = pd.DataFrame()
 
-    # Nếu chỉ cần backtest đến quá khứ và cache đã đủ -> Trả về luôn
+    # Backtest cut (never fetch beyond end_date)
     if end_date is not None:
-        if not df_old.empty:
-            df_backtest = df_old[df_old.index <= end_date]
-            return df_backtest.tail(days_to_load)
-        else:
-            today_str = end_date.strftime("%Y-%m-%d")
+        if df_old is not None and not df_old.empty:
+            try:
+                df_bt = df_old[df_old.index <= end_date]
+                return df_bt.tail(days_to_load)
+            except Exception:
+                return df_old.tail(days_to_load)
+        today_str = end_date.strftime("%Y-%m-%d")
 
-    # --- BƯỚC 2: KIỂM TRA CÓ CẦN GỌI API KHÔNG? ---
+    # If scan-mode disallows fetch, return cache tail only
+    if not allow_fetch:
+        return df_old.tail(days_to_load) if df_old is not None else pd.DataFrame()
+
+    # --- STEP 2: decide update ---
     need_update = True
-    
-    if last_cached_date and end_date is None:
+    if last_cached_date is not None and end_date is None:
         last_date_val = last_cached_date.date()
-        # Nếu cache là hôm qua, mà giờ mới 8h sáng -> Chưa có dữ liệu mới -> Không cần update
+        # Before market opens: don't refetch if we already have yesterday
         if now.hour < 9:
             yesterday = today_date - timedelta(days=1)
-            if last_date_val >= yesterday: need_update = False
-        # Nếu cache đã là hôm nay -> Không cần update
-        elif last_date_val == today_date and now.hour > 9: # Sau 9h mới cần check real-time
-             # Ở đây có thể tùy chỉnh: ví dụ cache 15 phút
-             pass 
-            
-    if not need_update and not df_old.empty:
+            if last_date_val >= yesterday:
+                need_update = False
+        # After market opens: if cache already includes today, we can skip (you can add intraday TTL here)
+        elif last_date_val == today_date:
+            need_update = False
+
+    if not need_update and df_old is not None and not df_old.empty:
         return df_old.tail(days_to_load)
 
-    # --- BƯỚC 3: GỌI API LẤY PHẦN CÒN THIẾU ---
-    start_date_str = None
-    fetch_mode = 'history'
-    
-    if last_cached_date:
-        # Chỉ tải từ ngày tiếp theo của cache
+    # --- STEP 3: fetch missing gap ---
+    if last_cached_date is not None:
         days_gap = (today_date - last_cached_date.date()).days
         if days_gap <= 0:
-            start_date_str = today_str # Load lại hôm nay (realtime)
-            fetch_mode = 'history' # Dùng history cho ổn định, hoặc realtime nếu cần
+            start_date_str = today_str
+            fetch_mode = "history"
         else:
             start_date_str = (last_cached_date + timedelta(days=1)).strftime("%Y-%m-%d")
-            fetch_mode = 'history'
+            fetch_mode = "history"
     else:
-        # Nếu chưa có cache, tải full
         start_date_str = (now - timedelta(days=days_to_load + 20)).strftime("%Y-%m-%d")
-        fetch_mode = 'history'
+        fetch_mode = "history"
 
-    # Nếu ngày bắt đầu lớn hơn hôm nay -> Không có gì để tải
-    if start_date_str > today_str: 
+    if start_date_str > today_str:
         return df_old.tail(days_to_load)
 
-    # Gọi hàm fetch (đã định nghĩa ở trên)
     df_new = fetch_stock_data(symbol, start_date_str, today_str, interval, mode=fetch_mode)
     df_new = _validate_ohlcv_df(df_new)
 
-    # --- BƯỚC 4: GHÉP (MERGE) VÀ LƯU LẠI ---
-    df_final = pd.DataFrame()
+    # --- STEP 4: merge + persist ---
     if df_new is not None and not df_new.empty:
-        if not df_old.empty:
-            # Ghép mới vào cũ
+        if df_old is not None and not df_old.empty:
             df_final = pd.concat([df_old, df_new])
-            # Xóa trùng lặp (giữ cái mới nhất)
-            df_final = df_final[~df_final.index.duplicated(keep='last')]
+            df_final = df_final[~df_final.index.duplicated(keep="last")]
         else:
             df_final = df_new
-        
-        df_final.sort_index(inplace=True)
-        # Tính lại chỉ báo cho chắc
-        df_final = calculate_full_indicators(df_final)
-        
-        # Lưu ngược vào Cache (để lần sau nhanh hơn)
-        # Lưu ý: Trên Streamlit Cloud, file này sẽ mất khi reboot, nhưng sẽ giúp nhanh trong phiên làm việc
-        try: df_final.to_parquet(file_path)
-        except: pass
+        df_final = df_final.sort_index()
+
+        if compute_indicators:
+            df_final = calculate_full_indicators(df_final)
+
+        try:
+            df_final.to_parquet(file_path)
+        except Exception:
+            pass
     else:
         df_final = df_old
 
-    # Lọc cuối cùng
-    if not df_final.empty:
-        # Bỏ ngày nghỉ (T7, CN) và Vol=0
-        df_final = df_final[(df_final.index.dayofweek < 5) & (df_final['Volume'] > 0)]
-        if end_date is not None:
-            df_final = df_final[df_final.index <= end_date]
-    
-    return df_final.tail(days_to_load)
+    # Final clean
+    if df_final is not None and not df_final.empty:
+        try:
+            df_final = df_final[(df_final.index.dayofweek < 5) & (df_final["Volume"] > 0)]
+        except Exception:
+            pass
+
+    return (df_final.tail(days_to_load) if df_final is not None else pd.DataFrame())
 
 def load_smart_money_data(symbol):
     """Placeholder an toàn cho Smart Money"""

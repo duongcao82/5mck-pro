@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from config import now_vn, TELEGRAM_KILLZONE_ONLY, TELEGRAM_ALERT_SCORE_MIN, KILLZONE_WINDOWS
-from data import load_data_with_cache
+from data import load_data_with_cache, read_cache_fast
 from smc_core import (
     ensure_smc_columns,
     detect_entry_models,
@@ -91,16 +91,22 @@ def strategy_smart_timeframe(symbol, d1_side, df_htf=None, end_date=None):
     refined_entry = None
     refined_sl = None
 
-    df_htf = ensure_smc_columns(df_htf) if df_htf is not None and not df_htf.empty else None
+    # Avoid extra DataFrame copies: caller may already copy once.
+    df_htf = ensure_smc_columns(df_htf, copy=False) if df_htf is not None and not df_htf.empty else None
 
     try:
         tf = "1H" if current_hour < 11 else "15m"
         days = 20 if current_hour < 11 else 5
 
-        df_ltf_raw = load_data_with_cache(symbol, days_to_load=days, timeframe=tf, end_date=end_date)
+        # Scanner/live path should NEVER trigger API fetch: only read cache.
+        # Tail size: approximate bars/day to keep file IO small
+        bars_per_day = {"1H": 7, "15m": 28}
+        tail_n = max(120, int(days) * bars_per_day.get(tf, 28) + 50)
+        df_ltf_raw = read_cache_fast(symbol, timeframe=tf, tail_n=tail_n, end_date=end_date)
 
         if df_ltf_raw is not None and not df_ltf_raw.empty:
-            df_ltf = ensure_smc_columns(df_ltf_raw)
+            # Copy once then operate in-place downstream
+            df_ltf = ensure_smc_columns(df_ltf_raw.copy(), copy=False)
 
             # 1) KIỂM TRA SMC MODEL TRÊN KHUNG NHỎ
             entry_ltf = detect_entry_models(df_htf=df_htf, df_ltf=df_ltf) if df_htf is not None else None
@@ -171,11 +177,13 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
 
     try:
         # 1) Tải D1
-        df_d1 = load_data_with_cache(symbol, days_to_load=days, timeframe="1D")
+        # D1 scan: read-only cache (no API, no indicators) -> unlock speed
+        df_d1 = read_cache_fast(symbol, timeframe="1D", tail_n=max(260, int(days)))
         if df_d1 is None or len(df_d1) < 60:
             return _ret(None, "Dữ liệu thiếu")
 
-        df_d1 = ensure_smc_columns(df_d1)
+        # Copy once then operate in-place
+        df_d1 = ensure_smc_columns(df_d1.copy(), copy=False)
         last_row = df_d1.iloc[-1]
         close = float(last_row["Close"])
 
@@ -191,7 +199,7 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
         # 4) Nhận diện tín hiệu (ưu tiên SMC, không có mới PA)
         side, d1_pattern, zone = "NEUTRAL", "None", None
 
-        entry = detect_entry_models(df_htf=df_d1)
+        entry = detect_entry_models(df_htf=df_d1, return_artifacts=True)
         if entry and entry.get("entry") != "NEUTRAL":
             side = entry.get("entry")
             d1_pattern = f"SMC: {entry.get('model')}"
@@ -241,11 +249,19 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
         if risk <= 0:
             return _ret(None, "Risk invalid")
 
-        # 7) TP levels theo SMC
-        from smc_core import detect_fvg_zones, detect_order_blocks, detect_liquidity_sweep
-        fvgs = detect_fvg_zones(df_d1)
-        obs = detect_order_blocks(df_d1)
-        sweep_data = detect_liquidity_sweep(df_d1)
+        # 7) TP levels theo SMC (reuse artifacts if already computed)
+        ctx = (entry or {}).get("_ctx") if isinstance(entry, dict) else None
+        if ctx is None:
+            from smc_core import detect_fvg_zones, detect_order_blocks, detect_liquidity_sweep
+            ctx = {
+                "fvgs": detect_fvg_zones(df_d1),
+                "obs": detect_order_blocks(df_d1),
+                "sweep": detect_liquidity_sweep(df_d1),
+            }
+
+        fvgs = ctx.get("fvgs", [])
+        obs = ctx.get("obs", [])
+        sweep_data = ctx.get("sweep", None)
 
         tp_levels = []
         if side == "BUY":

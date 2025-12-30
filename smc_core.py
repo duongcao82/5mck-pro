@@ -6,14 +6,16 @@ import numpy as np
 # 0) SWINGS (Fractals) + ENSURE COLUMNS
 # ==============================================================================
 
-def detect_swings(df: pd.DataFrame, lookback: int = 2) -> pd.DataFrame:
+def detect_swings(df: pd.DataFrame, lookback: int = 2, copy: bool = True) -> pd.DataFrame:
     """
     Fractals kiểu 5 nến (lookback=2).
     """
     if df is None or df.empty or len(df) < (lookback * 2 + 1):
         return df
 
-    df = df.copy()
+    if copy:
+        df = df.copy()
+    # Ensure columns exist (in-place when copy=False)
     df["Swing_High"] = False
     df["Swing_Low"] = False
 
@@ -39,17 +41,18 @@ def detect_swings(df: pd.DataFrame, lookback: int = 2) -> pd.DataFrame:
     return df
 
 
-def ensure_smc_columns(df: pd.DataFrame) -> pd.DataFrame:
+def ensure_smc_columns(df: pd.DataFrame, copy: bool = True) -> pd.DataFrame:
     if df is None or df.empty:
         return df
-    df = df.copy()
+    if copy:
+        df = df.copy()
     if "Swing_High" not in df.columns or "Swing_Low" not in df.columns:
-        df = detect_swings(df, lookback=2)
+        df = detect_swings(df, lookback=2, copy=False)
     else:
         if df["Swing_High"].sum() == 0 and len(df) > 10:
-            df = detect_swings(df, lookback=2)
+            df = detect_swings(df, lookback=2, copy=False)
         if df["Swing_Low"].sum() == 0 and len(df) > 10:
-            df = detect_swings(df, lookback=2)
+            df = detect_swings(df, lookback=2, copy=False)
     return df
 
 
@@ -105,9 +108,13 @@ def compute_smc_levels(df: pd.DataFrame) -> dict:
 # 2) FVG & ORDER BLOCKS
 # ==============================================================================
 
-def detect_fvg_zones(df: pd.DataFrame, max_zones: int = 5) -> list:
-    if df is None or df.empty or len(df) < 5: return []
-    df = df.copy()
+def detect_fvg_zones(df: pd.DataFrame, max_zones: int = 5, future_window: int = 60) -> list:
+    """Detect Fair Value Gaps.
+
+    Perf: limit the "future" invalidation scan to `future_window` bars to avoid O(n^2) behavior.
+    """
+    if df is None or df.empty or len(df) < 5:
+        return []
     highs = df["High"].values
     lows = df["Low"].values
     dates = df.index
@@ -120,14 +127,14 @@ def detect_fvg_zones(df: pd.DataFrame, max_zones: int = 5) -> list:
         # Bullish FVG
         if highs[i - 2] < lows[i]:
             if (lows[i] - highs[i - 2]) > min_gap:
-                future_lows = lows[i + 1:]
+                future_lows = lows[i + 1:i + 1 + int(future_window)] if future_window else lows[i + 1:]
                 mid = (lows[i] + highs[i-2]) / 2
                 if not (len(future_lows) > 0 and np.min(future_lows) <= mid):
                     zones.append({"type": "FVG_BULL", "side": "bull", "y0": float(highs[i-2]), "y1": float(lows[i]), "bottom": float(highs[i-2]), "top": float(lows[i]), "start_idx": dates[i-2]})
         # Bearish FVG
         elif lows[i - 2] > highs[i]:
             if (lows[i - 2] - highs[i]) > min_gap:
-                future_highs = highs[i + 1:]
+                future_highs = highs[i + 1:i + 1 + int(future_window)] if future_window else highs[i + 1:]
                 mid = (lows[i-2] + highs[i]) / 2
                 if not (len(future_highs) > 0 and np.max(future_highs) >= mid):
                     zones.append({"type": "FVG_BEAR", "side": "bear", "y0": float(highs[i]), "y1": float(lows[i-2]), "bottom": float(highs[i]), "top": float(lows[i-2]), "start_idx": dates[i-2]})
@@ -135,9 +142,12 @@ def detect_fvg_zones(df: pd.DataFrame, max_zones: int = 5) -> list:
 
 
 def detect_order_blocks(df: pd.DataFrame, lookback: int = 120, max_obs: int = 5) -> list:
-    if df is None or df.empty or len(df) < 30: return []
-    df = ensure_smc_columns(df).copy()
-    if lookback and len(df) > lookback: df = df.tail(lookback)
+    if df is None or df.empty or len(df) < 30:
+        return []
+    # Avoid extra copies in scan path (caller can copy once)
+    df = ensure_smc_columns(df, copy=False)
+    if lookback and len(df) > lookback:
+        df = df.tail(lookback)
     
     closes = df["Close"].values; highs = df["High"].values; lows = df["Low"].values
     dates = df.index
@@ -671,46 +681,135 @@ def entry_breaker_retest(df: pd.DataFrame):
 # 6) AGGREGATOR & SCORING (UPDATED)
 # ==============================================================================
 
-def detect_entry_models(df_htf: pd.DataFrame, df_ltf=None, df_pair=None):
+def detect_entry_models(df_htf: pd.DataFrame, df_ltf=None, df_pair=None, return_artifacts: bool = False):
     """
     Tổng hợp tất cả các models theo thứ tự ưu tiên
     """
     # 1. Super Strong
-    e = entry_ls_mss_bb_fvg(df_htf); 
-    if e: return e
+    e = entry_ls_mss_bb_fvg(df_htf)
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            # Attach HTF artifacts to avoid recomputation in scanner
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
     #e = entry_amd_setup(df_htf)
     #if e: return e
 
     # 2. Strong
     e = entry_silver_bullet(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
     e = entry_ls_mss_fvg(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
     e = entry_breaker_retest(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
     e = entry_ls_bpr(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
 
     # 3. Medium
     e = entry_ote_pullback(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
     
     # 4. SMT & Simple
     if df_pair is not None:
-        e = entry_smt_mss_ifvg(df_htf, df_pair); 
-        if e: return e
-        e = entry_smt_mss_bb(df_htf, df_pair); 
-        if e: return e
+        e = entry_smt_mss_ifvg(df_htf, df_pair)
+        if e:
+            if return_artifacts:
+                e = dict(e)
+                e["_ctx"] = {
+                    "fvgs": detect_fvg_zones(df_htf),
+                    "obs": detect_order_blocks(df_htf),
+                    "sweep": detect_liquidity_sweep(df_htf),
+                }
+            return e
+        e = entry_smt_mss_bb(df_htf, df_pair)
+        if e:
+            if return_artifacts:
+                e = dict(e)
+                e["_ctx"] = {
+                    "fvgs": detect_fvg_zones(df_htf),
+                    "obs": detect_order_blocks(df_htf),
+                    "sweep": detect_liquidity_sweep(df_htf),
+                }
+            return e
         
     e = entry_mss_fvg_simple(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
     e = entry_mss_ob_simple(df_htf)
-    if e: return e
+    if e:
+        if return_artifacts:
+            e = dict(e)
+            e["_ctx"] = {
+                "fvgs": detect_fvg_zones(df_htf),
+                "obs": detect_order_blocks(df_htf),
+                "sweep": detect_liquidity_sweep(df_htf),
+            }
+        return e
 
     # 5. Trend Follow
     if df_ltf is not None:
         e = entry_bos_pullback(df_htf, df_ltf)
-        if e: return e
+        if e:
+            if return_artifacts:
+                e = dict(e)
+                e["_ctx"] = {
+                    "fvgs": detect_fvg_zones(df_htf),
+                    "obs": detect_order_blocks(df_htf),
+                    "sweep": detect_liquidity_sweep(df_htf),
+                }
+            return e
 
     return None
 
