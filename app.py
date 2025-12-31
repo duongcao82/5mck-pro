@@ -2,24 +2,32 @@ import os
 import sys
 import time
 import streamlit as st
-from universe import RAW_TICKERS_STR
-default_str = RAW_TICKERS_STR.replace("\n", " ").strip()
+
 # ==============================================================================
 # 1. SETUP CƠ BẢN & UI SKELETON (CHẠY NGAY LẬP TỨC)
 # ==============================================================================
 # BẮT BUỘC: Lệnh này phải ở dòng đầu tiên
 st.set_page_config(page_title="5MCK Pro", layout="wide", page_icon="📈")
 
-# Fix path
+# [FIX] Cấu hình Matplotlib Backend để tránh lỗi Thread trên Cloud
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+except ImportError:
+    pass
+
+# Fix path để import các module trong thư mục src
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # --- A. VẼ GIAO DIỆN CƠ BẢN TRƯỚC (Để qua mặt Healthcheck 503) ---
-# Chúng ta vẽ Sidebar và Tiêu đề TRƯỚC KHI load thư viện nặng
+# CSS tùy chỉnh
 st.markdown(
     """
     <style>
         .stApp { background-color: #0e1117; color: white; } 
         .metric-card { background-color: #262730; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
+        /* Ẩn bớt padding mặc định của Streamlit */
+        .block-container { padding-top: 1rem; padding-bottom: 1rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -29,32 +37,38 @@ st.markdown(
 if "current_symbol" not in st.session_state:
     st.session_state.current_symbol = "VNINDEX"
 
-# --- B. VẼ SIDEBAR TINH GỌN ---
+# Định nghĩa Default String tạm thời (để hiện UI ngay mà không cần load universe.py)
+# Khi load xong modules, biến này sẽ được update từ file universe.py
+if "scan_symbols_text" not in st.session_state:
+    st.session_state.scan_symbols_text = "ACB, HPG, SSI, VND, VCB, BID, CTG, VHM, VIC, VRE, FPT, MWG, MSN, GVR, GAS, POW, PLX, STB, TCB, TPB, MBB, VIB, VPB, HDB, OCB, SHB, LPB, MSB, SSB, EIB"
+
+# --- B. VẼ SIDEBAR NGAY LẬP TỨC (Để User thấy App đang sống) ---
 st.sidebar.empty()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 1. LOGO: Chỉ hiển thị VPS (Tiết kiệm diện tích)
+# 1. LOGO
 img_vps = os.path.join(current_dir, "5MCK_VPS.jpg")
 if os.path.exists(img_vps):
-    try: st.sidebar.image(img_vps, width='stretch') # width=None để tự chỉnh
+    try: st.sidebar.image(img_vps, width=None) 
     except: st.sidebar.title("🎛️ 5MCK Pro")
 else:
     st.sidebar.title("🎛️ 5MCK Pro")
 
-# 2. INPUT MÃ & NÚT BC
+# 2. INPUT MÃ & NÚT BC (Vẽ giao diện trước, xử lý logic sau)
 c_search, c_btn = st.sidebar.columns([2, 1])
 with c_search:
     symbol_input = st.text_input("🔍 Mã:", value=st.session_state.current_symbol, label_visibility="collapsed").upper()
 with c_btn:
-    btn_vnindex = st.button("📢", help="Báo cáo VNINDEX") # Nút nhỏ gọn
+    btn_vnindex = st.button("📢", help="Báo cáo VNINDEX") 
 
+# Logic đổi mã nhanh
 if symbol_input != st.session_state.current_symbol:
     st.session_state.current_symbol = symbol_input
     st.rerun()
 
 st.sidebar.markdown("---")
 
-# 3. CẤU HÌNH CHART (Chia 2 cột để gọn trong 1 khung hình)
+# 3. CẤU HÌNH CHART
 st.sidebar.caption("⚙️ Cấu hình hiển thị")
 col_cfg1, col_cfg2 = st.sidebar.columns(2)
 
@@ -69,7 +83,7 @@ with col_cfg2:
     use_smc = st.checkbox("SMC", value=True)
     use_trendline = st.checkbox("Trend", value=True)
 
-# 4. MONEY MANAGEMENT (Dùng Expander để ẩn đi cho gọn)
+# 4. MONEY MANAGEMENT
 with st.sidebar.expander("💰 Quản lý vốn (NAV)", expanded=False):
     input_nav = st.number_input("Vốn (NAV)", value=1_000_000_000, step=100_000_000)
     input_risk = st.slider("Risk %", 0.5, 5.0, 1.0) / 100
@@ -77,11 +91,15 @@ with st.sidebar.expander("💰 Quản lý vốn (NAV)", expanded=False):
 
 
 # ==============================================================================
-# 2. HEAVY LOADING (BÂY GIỜ MỚI LOAD THƯ VIỆN NẶNG)
+# 2. HEAVY LOADING (LAZY LOADING - CHỈ LOAD KHI CẦN)
 # ==============================================================================
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner="Đang khởi động hệ thống phân tích...")
 def init_modules():
+    """
+    Hàm này chứa tất cả các import nặng.
+    Nó chỉ chạy 1 lần duy nhất khi khởi động App.
+    """
     import concurrent.futures
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -91,75 +109,66 @@ def init_modules():
     # Config Pandas
     pd.set_option("future.no_silent_downcasting", True)
 
-    # Import Modules nội bộ
-    from universe import get_vnallshare_universe
+    # --- IMPORT MODULES NỘI BỘ ---
+    # Import ở đây để không chặn UI loading ban đầu
+    from universe import get_vnallshare_universe, RAW_TICKERS_STR # Lấy thêm RAW_TICKERS_STR
     from data import load_data_with_cache, load_smart_money_data
     from viz import plot_single_timeframe, plot_smart_money
     from smc_core import (
         ensure_smc_columns, compute_smc_levels, detect_fvg_zones,
         detect_order_blocks, detect_trendlines, detect_confluence_zones
     )
+    import smc_core 
     from scanner import scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report
     from indicators import detect_rsi_divergence
     from pipeline_manager import run_bulk_update
-    import smc_core 
     from telegram_bot import send_telegram_msg
 
+    # Trả về tất cả các biến/hàm cần dùng dưới dạng tuple
     return (
         pd, go, concurrent, datetime, ZoneInfo,
         get_vnallshare_universe, load_data_with_cache, load_smart_money_data,
         plot_single_timeframe, plot_smart_money,
         ensure_smc_columns, compute_smc_levels, detect_fvg_zones, detect_order_blocks, detect_trendlines, detect_confluence_zones,
         scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report,
-        detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg
+        detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg,
+        RAW_TICKERS_STR 
     )
- 
-@st.cache_data(ttl=3600*12) # Cache 12 tiếng
+
+@st.cache_data(ttl=3600*12)
 def get_sector_map():
     """Lấy mapping Mã CK -> Tên Ngành từ nguồn VCI"""
     try:
         from vnstock_data import Listing
-        # Theo tài liệu: 2. symbols_by_industries() - Mã Cổ Phiếu Theo Ngành ICB
         listing = Listing(source='vci')
         df = listing.symbols_by_industries(lang='vi')
-        
-        # icb_name3 thường là nhóm ngành cụ thể (VD: Ngân hàng, Bất động sản)
-        # Tạo dictionary: {'HPG': 'Thép', 'VCB': 'Ngân hàng', ...}
         if not df.empty and 'symbol' in df.columns and 'icb_name3' in df.columns:
             return dict(zip(df['symbol'], df['icb_name3']))
     except Exception as e:
-        print(f"Lỗi lấy sector: {e}")
+        pass
     return {}
+
 # =========================
-# GATE: Nạp hệ thống theo nút bấm (tránh 503)
+# LOAD MODULES VÀO BIẾN TOÀN CỤC
 # =========================
-if "modules_loaded" not in st.session_state:
-    st.session_state.modules_loaded = False
+# Gọi hàm load modules. Lần đầu sẽ tốn vài giây, các lần sau tức thì.
+vars_loaded = init_modules()
 
-if not st.session_state.modules_loaded:
-    st.info("✅ UI đã sẵn sàng. Bấm nút dưới để nạp hệ thống (lần đầu sẽ lâu).")
-
-    if st.button("🚀 Nạp hệ thống", type="primary"):
-        with st.spinner("Đang nạp modules..."):
-            st.session_state.vars_loaded = init_modules()
-            st.session_state.modules_loaded = True
-        st.rerun()
-
-    # Chưa nạp thì dừng tại đây => UI lên ngay, không import nặng
-    st.stop()
-
-# Đã nạp xong -> lấy ra dùng
-vars_loaded = st.session_state.vars_loaded
-
-# UNPACK VARIABLES (Bung nén biến ra để dùng)
+# BUNG NÉN BIẾN RA ĐỂ DÙNG (UNPACKING)
 (
     pd, go, concurrent, datetime, ZoneInfo,
     get_vnallshare_universe, load_data_with_cache, load_smart_money_data,
     plot_single_timeframe, plot_smart_money,
     ensure_smc_columns, compute_smc_levels, detect_fvg_zones, detect_order_blocks, detect_trendlines, detect_confluence_zones,
     scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report,
-    detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg
+    detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg,
+    RAW_TICKERS_STR 
 ) = vars_loaded
+
+# Cập nhật lại danh sách Scan đầy đủ từ Universe (nếu đang dùng list mặc định ngắn)
+if "scan_symbols_text" in st.session_state and len(st.session_state.scan_symbols_text) < 200:
+     st.session_state.scan_symbols_text = RAW_TICKERS_STR.replace("\n", " ").strip()
+
 
 # ==============================================================================
 # 3. LOGIC XỬ LÝ SỰ KIỆN SIDEBAR (ĐÃ LOAD XONG THƯ VIỆN)
