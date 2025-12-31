@@ -278,8 +278,17 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
 
         tp_final = sorted(list(set([float(x) for x in tp_levels if x is not None])), reverse=(side == "SELL"))
         tp_str = " | ".join([f"{p:,.2f}" for p in tp_final[:3]])
-
+        
+        # === [THÊM MỚI] TÍNH R:R ===
+        rr_ratio = 0.0
+        if len(tp_final) > 0 and risk > 0:
+            # Lấy TP đầu tiên (an toàn nhất) để tính R:R cơ bản
+            first_tp = tp_final[0] 
+            reward = abs(first_tp - final_poi)
+            rr_ratio = reward / risk
+        
         # 8) BE + Score
+        final_be = final_poi + 1.8 * risk if side == "BUY" else final_poi - 1.8 * risk
         final_be = final_poi + 1.8 * risk if side == "BUY" else final_poi - 1.8 * risk
 
         scoring_data = {
@@ -326,6 +335,7 @@ def scan_symbol(symbol, days=200, ema_span=50, nav=1e9, risk_pct=0.01, max_posit
             "POI_D1": round(float(poi_d1), 2) if poi_d1 is not None else None,
             "Dist_POI": round(dist_poi_pct, 2),
             "KL": kl,
+            "RR": round(rr_ratio, 2),
             "ENTRY": round(float(final_poi), 2),
             "SL": round(float(final_sl), 2),
             "BE": round(float(final_be), 2),

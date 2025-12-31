@@ -159,10 +159,8 @@ class ParquetCacheExporter(Exporter):
 
 def run_bulk_update(tickers_list, days_back=200):
     """
-    Cập nhật dữ liệu đa khung thời gian:
-    - D1: 365 ngày
-    - 1H: 50 ngày
-    - 15m: 20 ngày
+    Cập nhật dữ liệu đa khung thời gian.
+    TỐI ƯU HÓA: Chỉ tải dữ liệu recent (gần nhất) cho Intraday để append vào cache.
     """
     if not HAS_PIPELINE:
         return "⚠️ Lỗi: Chưa cài đặt thư viện 'vnstock_data'."
@@ -172,21 +170,26 @@ def run_bulk_update(tickers_list, days_back=200):
         exporter = ParquetCacheExporter()
         scheduler = Scheduler(fetcher=fetcher, exporter=exporter, max_workers=10)
         
-        # 1. Lấy thời gian hiện tại theo VN để đồng nhất
+        # 1. Lấy thời gian hiện tại
         now = now_vn() 
         end_date = now.strftime('%Y-%m-%d')
         
-        # 2. Định nghĩa các cấu hình tải
+        # 2. Cấu hình tải thông minh (Smart Update)
+        # - D1: Vẫn tải days_back (mặc định 3 ngày từ app.py truyền vào) để đảm bảo cập nhật giá điều chỉnh/cổ tức nếu có.
+        # - 1H/15m: Chỉ cần tải 4 ngày gần nhất (đủ cover cuối tuần + 1-2 phiên gd) là đủ nối vào cache.
+        
         configs = [
-            {"label": "D1", "days": days_back, "interval": "1D"},
-            {"label": "1H", "days": 30, "interval": "1H"},
-            {"label": "15m", "days": 12, "interval": "15m"}
+            {"label": "D1", "days": days_back, "interval": "1D"}, 
+            {"label": "1H", "days": 4, "interval": "1H"},   # <--- SỬA TỪ 30 XUỐNG 4
+            {"label": "15m", "days": 4, "interval": "15m"}  # <--- SỬA TỪ 12 XUỐNG 4
         ]
         
         # 3. Chạy vòng lặp cập nhật
         for i, cfg in enumerate(configs, 1):
+            # Tính start_date dựa trên số ngày cần tải thêm
             start_date = (now - timedelta(days=cfg['days'])).strftime('%Y-%m-%d')
-            print(f"🔄 [{i}/3] Đang tải {cfg['label']} ({cfg['days']} ngày) | Từ {start_date} đến {end_date}")
+            
+            print(f"🔄 [{i}/3] Smart Update {cfg['label']} ({cfg['days']}d) | {start_date} -> {end_date}")
             
             scheduler.run(
                 tickers=tickers_list,
@@ -194,7 +197,7 @@ def run_bulk_update(tickers_list, days_back=200):
                 exporter_kwargs={'output_dir': CACHE_DIR, 'interval': cfg['interval']}
             )
         
-        return f"✅ Đã cập nhật xong dữ liệu: D1 ({days_back}d), 1H (50d), 15m (20d)."
+        return f"✅ Smart Update hoàn tất! (D1: {days_back}d, Intraday: 4d)"
         
     except Exception as e:
         return f"❌ Lỗi Runtime: {str(e)}"

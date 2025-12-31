@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import streamlit as st
-default_str = """ACB, BCM, BID, BVH, CTG, FPT, GAS, GVR, HDB, HPG, MBB, MSN, MWG, PLX, POW, SAB, SHB, SSB, STB, TCB, TPB, VCB, VHM, VIC, VNM, VPB, VRE, LPB, DGC, OCB"""
+default_str = """ACB,ANV,BCM,BID,BMP,BSI,BVH,BWE,CII,CMG,CTD,CTG,CTR,CTS,DBC,DCM,DGC,DGW,DIG,DPM,DSE,DXG,DXS,EIB,EVF,FPT,FRT,FTS,GAS,GEE,GEX,GMD,GVR,HAG,HCM,HDB,HDC,HDG,HHV,HPG,HSG,HT1,IMP,KBC,KDC,KDH,KOS,LPB,MBB,MSB,MSN,MWG,NAB,NKG,NLG,NT2,OCB,PAN,PC1,PDR,PHR,PLX,PNJ,POW,PPC,PTB,PVD,PVT,REE,SAB,SBT,SCS,SHB,SIP,SJS,SSB,SSI,STB,SZC,TCB,TCH,TLG,TPB,VCB,VCG,VCI,VGC,VHC,VHM,VIB,VIC,VIX,VJC,VND,VNM,VPB,VPI,VRE,VSC,VTP"""
 # ==============================================================================
 # 1. SETUP CƠ BẢN & UI SKELETON (CHẠY NGAY LẬP TỨC)
 # ==============================================================================
@@ -45,7 +45,7 @@ c_search, c_btn = st.sidebar.columns([2, 1])
 with c_search:
     symbol_input = st.text_input("🔍 Mã:", value=st.session_state.current_symbol, label_visibility="collapsed").upper()
 with c_btn:
-    btn_vnindex = st.button("📢 BC", help="Báo cáo VNINDEX") # Nút nhỏ gọn
+    btn_vnindex = st.button("📢", help="Báo cáo VNINDEX") # Nút nhỏ gọn
 
 if symbol_input != st.session_state.current_symbol:
     st.session_state.current_symbol = symbol_input
@@ -112,7 +112,23 @@ def init_modules():
         scan_symbol, scan_universe_two_phase, process_and_send_vnindex_report, export_journal, format_scan_report,
         detect_rsi_divergence, run_bulk_update, smc_core, send_telegram_msg
     )
-
+ 
+@st.cache_data(ttl=3600*12) # Cache 12 tiếng
+def get_sector_map():
+    """Lấy mapping Mã CK -> Tên Ngành từ nguồn VCI"""
+    try:
+        from vnstock_data import Listing
+        # Theo tài liệu: 2. symbols_by_industries() - Mã Cổ Phiếu Theo Ngành ICB
+        listing = Listing(source='vci')
+        df = listing.symbols_by_industries(lang='vi')
+        
+        # icb_name3 thường là nhóm ngành cụ thể (VD: Ngân hàng, Bất động sản)
+        # Tạo dictionary: {'HPG': 'Thép', 'VCB': 'Ngân hàng', ...}
+        if not df.empty and 'symbol' in df.columns and 'icb_name3' in df.columns:
+            return dict(zip(df['symbol'], df['icb_name3']))
+    except Exception as e:
+        print(f"Lỗi lấy sector: {e}")
+    return {}
 # =========================
 # GATE: Nạp hệ thống theo nút bấm (tránh 503)
 # =========================
@@ -177,6 +193,29 @@ def plotly_draw_config():
 # ==============================================================================
 # 4. HÀM VẼ CHART (GIỮ NGUYÊN LOGIC CŨ)
 # ==============================================================================
+# --- [TỐI ƯU HÓA] CACHE TÍNH TOÁN SMC ---
+@st.cache_data(ttl=300, max_entries=20, show_spinner=False)
+def calculate_smc_cached(df_json_orient_split, use_rsi, use_trendline):
+    """
+    Hàm wrapper để cache các tính toán nặng (SMC, FVG, OB, Trendlines).
+    Truyền df dưới dạng JSON hoặc Dictionary để Streamlit hash được nhanh hơn.
+    """
+    # Reconstruct DataFrame từ JSON/Dict để tính toán
+    import pandas as pd
+    df = pd.DataFrame(**df_json_orient_split) 
+    df['Date'] = pd.to_datetime(df['Date']) if 'Date' in df.columns else df.index
+    if 'Date' in df.columns: df.set_index('Date', inplace=True)
+
+    # Tính toán (Logic cũ của bạn)
+    smc = compute_smc_levels(df)
+    fvgs = detect_fvg_zones(df, max_zones=5)
+    obs = detect_order_blocks(df)
+    fvgs, obs = detect_confluence_zones(df, fvgs, obs)
+    rsi_divs = detect_rsi_divergence(df, lookback=100) if use_rsi else []
+    t_lines = detect_trendlines(df) if use_trendline else []
+    
+    return smc, fvgs, obs, rsi_divs, t_lines
+    
 def process_and_plot(
     df, interval, show_vol_param=True, show_ma_param=True, show_vsa_param=False,
     htf_zones=None, skip_current_zones=False, enable_smart_money=False, build_fig=True,
@@ -194,16 +233,17 @@ def process_and_plot(
         except Exception: df_smart_money = None
 
     # 2) Tính zones/levels
-    smc = compute_smc_levels(df)
-    fvgs = detect_fvg_zones(df, max_zones=5)
-    obs = detect_order_blocks(df)
-    fvgs, obs = detect_confluence_zones(df, fvgs, obs)
-    rsi_divs = detect_rsi_divergence(df, lookback=100) if use_rsi else []
-    t_lines = detect_trendlines(df) if use_trendline else []
+    # Chuyển DF thành dict để làm key cho cache (nhanh hơn hash cả dataframe lớn)
+    df_serialized = df.reset_index().to_dict(orient='split') 
+    
+    # Gọi hàm đã cache ở Bước 2.1
+    smc, fvgs_raw, obs_raw, rsi_divs, t_lines = calculate_smc_cached(
+        df_serialized, use_rsi, use_trendline
+    )
 
-    plot_fvgs = [] if skip_current_zones else fvgs
-    plot_obs = [] if skip_current_zones else obs
-    zones_out = fvgs + obs
+    plot_fvgs = [] if skip_current_zones else fvgs_raw
+    plot_obs = [] if skip_current_zones else obs_raw
+    zones_out = fvgs_raw + obs_raw
 
     # 3) Plot
     if not build_fig: return None, zones_out
@@ -385,7 +425,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     # --- 1. Load Universe (Chỉ còn đúng 1 nút bấm nằm trong card) ---
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+    #st.markdown('<div class="card">', unsafe_allow_html=True)
     if st.button("🌍1.Load Universe", width='stretch'):
         with st.spinner("Loading..."):
             try:
@@ -398,7 +438,7 @@ with st.sidebar:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- 2. Update Cache (Gọn nhẹ) ---
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+    #st.markdown('<div class="card">', unsafe_allow_html=True)
     scan_symbols_sidebar = _parse_symbols(st.session_state.scan_symbols_text)
     if st.button("📥2.Update Cache", width='stretch'):
         if not scan_symbols_sidebar: st.error("List trống")
@@ -414,14 +454,14 @@ with st.sidebar:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- 3. Start Scan (Tinh gọn nhất) ---
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+    #   st.markdown('<div class="card">', unsafe_allow_html=True)
     
     # Gom Slider và Checkbox vào 2 cột cho tiết kiệm dòng
     c1, c2 = st.columns([2, 1.5]) 
     with c1:
         # label_visibility="collapsed" giúp ẩn chữ "Shortlist" đi nếu muốn siêu gọn
         # hoặc giữ "visible" nhưng chỉnh margin
-        shortlist_n = st.slider("Top", 20, 100, 60, 10, help="Số lượng mã lọc phase 1")
+        shortlist_n = st.slider("Top", 50, 100, 100, 10, help="Số lượng mã lọc phase 1")
     with c2:
         auto_send_tele = st.checkbox("Tele", value=False)
 
@@ -442,21 +482,28 @@ with st.expander("🧾 List Scan", expanded=False):
         st.session_state.scan_symbols_text = scan_list_input
         st.session_state.cache_ready = False
 
-issues = core_healthcheck_ui()
-if issues:
-    st.warning(f"Core Check: {issues}")
-else:
-    st.success("Core OK ✅")
-
+#issues = core_healthcheck_ui()
+#if issues:
+#    st.warning(f"Core Check: {issues}")
+#else:
+#    st.success("Core OK ✅")
+sector_map = get_sector_map()
 st.markdown("### 🔎 Filters")
-f1, f2, f3 = st.columns([1,1,1])
+
+f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
 with f1:
     signal_filter = st.selectbox("Signal", ["ALL", "BUY", "SELL"], index=0)
 with f2:
     min_score = st.number_input("Score >=", value=0.0, step=0.5)
 with f3:
-    sector_filter = st.selectbox("Sector", ["ALL"], index=0, disabled=True, help="Chưa có cột Sector trong dữ liệu")
-
+    # Lấy danh sách ngành thực tế để đưa vào Selectbox
+    available_sectors = ["ALL"]
+    if sector_map:
+        available_sectors += sorted(list(set(sector_map.values())))
+    sector_filter = st.selectbox("Sector", available_sectors, index=0)
+with f4:
+    # THÊM BỘ LỌC R:R
+    min_rr = st.number_input("R:R >=", value=0.0, step=0.5, help="Tỷ lệ Reward/Risk tối thiểu")
 # Run scan when clicked
 if start_scan:
     st.session_state.scan_results = None
@@ -514,32 +561,45 @@ if start_scan:
 if st.session_state.get("scan_results") is not None and not st.session_state.scan_results.empty:
     df_res = st.session_state.scan_results.copy()
 
-    # Sector dropdown nếu có
-    if "Sector" in df_res.columns:
-        sectors = ["ALL"] + sorted([s for s in df_res["Sector"].dropna().unique().tolist() if str(s).strip()])
-        sector_filter = st.selectbox("Sector", sectors, index=0)
+    # A. MAP SECTOR VÀO DATAFRAME
+    # Nếu trong scanner chưa có Sector, ta map từ sector_map vào
+    if "Sector" not in df_res.columns:
+        df_res["Sector"] = df_res["Symbol"].map(sector_map).fillna("Khác")
 
-    # Apply filters
+    # B. ÁP DỤNG BỘ LỌC
     dff = df_res.copy()
+    
+    # 1. Lọc Signal
     if signal_filter != "ALL":
         dff = dff[dff["Signal"].astype(str).str.contains(signal_filter)]
+    
+    # 2. Lọc Score
     try:
         dff = dff[dff["Score"].astype(float) >= float(min_score)]
-    except Exception:
-        pass
-    if "Sector" in dff.columns and sector_filter != "ALL":
+    except: pass
+    
+    # 3. Lọc Sector
+    if sector_filter != "ALL":
         dff = dff[dff["Sector"] == sector_filter]
 
-    # KPI
+    # 4. Lọc R:R (Mới)
+    if "RR" in dff.columns:
+        try:
+            dff = dff[dff["RR"].astype(float) >= float(min_rr)]
+        except: pass
+
+    # KPI Metrics
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Setups", len(dff))
     k2.metric("BUY", int(dff["Signal"].astype(str).str.contains("BUY").sum()))
     k3.metric("SELL", int(dff["Signal"].astype(str).str.contains("SELL").sum()))
     try:
-        k4.metric("Avg Score", round(float(dff["Score"].astype(float).mean()), 2))
-    except Exception:
-        k4.metric("Avg Score", "-")
-
+        # Hiển thị R:R trung bình thay vì Score (hoặc tùy bạn chọn)
+        avg_rr = dff["RR"].mean() if "RR" in dff.columns else 0
+        k4.metric("Avg R:R", f"{avg_rr:.2f}") 
+    except:
+        k4.metric("Avg R:R", "-")
+        
     # Export
     b1, b2 = st.columns([1,1])
     with b1:
@@ -557,11 +617,9 @@ if st.session_state.get("scan_results") is not None and not st.session_state.sca
     def format_score_ui(val):
         try: v = float(val)
         except: v = 0.0
-        if v >= 4.0: return f"🔥🔥 {v}"
-        if v >= 3.0: return f"⭐ {v}"
+        if v >= 4.0: return f"🔥🔥🔥 {v}"
+        if v >= 3.0: return f"⭐⭐ {v}"
         return str(v)
-
-    dff["Display_Score"] = dff["Score"].apply(format_score_ui)
 
     def _style_signal(val):
         sval = str(val)
@@ -587,16 +645,28 @@ if st.session_state.get("scan_results") is not None and not st.session_state.sca
         except Exception: 
             return ""
 
+    # C. HIỂN THỊ BẢNG (Cập nhật cột và sắp xếp)
     st.markdown("### 📋 Results")
     
-    # ÁP DỤNG STYLE MAP
+    # Tạo style tô màu
+    dff["Display_Score"] = dff["Score"].apply(format_score_ui)
+
+    # Cấu hình thứ tự cột (Đưa Sector và RR lên cho dễ nhìn)
+    # Thứ tự: Symbol -> Signal -> RR -> Score -> Sector -> ...
+    cols_order = [ "Symbol", "Sector", "Signal", "Display_Score",  "RR", "Dist_POI", "Price", "POI_D1", "KL", "SL", "TP", "Note"]
+    # Chỉ lấy những cột thực sự có trong dff
+    final_cols = [c for c in cols_order if c in dff.columns]
+
     event = st.dataframe(
         dff.style.map(_style_signal, subset=["Signal"])
-                 .map(_style_dist_poi, subset=["Dist_POI"]), # <--- ĐÃ THÊM DÒNG NÀY
+                 .map(_style_dist_poi, subset=["Dist_POI"]),
         width='stretch',
         hide_index=True,
-        column_order=[c for c in ["Symbol","Signal","Display_Score","Dist_POI","Price","POI_D1","KL","SL","TP","Note","Sector"] if c in dff.columns],
+        column_order=final_cols,
         column_config={
+            "RR": st.column_config.NumberColumn("R:R", format="%.2f", help="Risk:Reward Ratio"),         
+            "Display_Score": st.column_config.TextColumn("Score", width="medium"),             
+            "Sector": st.column_config.TextColumn("Ngành", width="medium"),
             "Dist_POI": st.column_config.NumberColumn("Dist%", format="%.2f%%"),
             "Price": st.column_config.NumberColumn("Price", format="%.2f"),
             "POI_D1": st.column_config.NumberColumn("POI", format="%.2f"),
