@@ -12,9 +12,15 @@ except ImportError:
     HAS_VNSTOCK_LIB = False
 
 # ==============================================================================
-# DANH SÁCH DỰ PHÒNG (FALLBACK) - 100 MÃ CỦA BẠN
+# DANH SÁCH 285 MÃ CỐ ĐỊNH (CỦA BẠN)
 # ==============================================================================
-RAW_TICKERS_STR = """ACB,ANV,BCM,BID,BMP,BSI,BVH,BWE,CII,CMG,CTD,CTG,CTR,CTS,DBC,DCM,DGC,DGW,DIG,DPM,DSE,DXG,DXS,EIB,EVF,FPT,FRT,FTS,GAS,GEE,GEX,GMD,GVR,HAG,HCM,HDB,HDC,HDG,HHV,HPG,HSG,HT1,IMP,KBC,KDC,KDH,KOS,LPB,MBB,MSB,MSN,MWG,NAB,NKG,NLG,NT2,OCB,PAN,PC1,PDR,PHR,PLX,PNJ,POW,PPC,PTB,PVD,PVT,REE,SAB,SBT,SCS,SHB,SIP,SJS,SSB,SSI,STB,SZC,TCB,TCH,TLG,TPB,VCB,VCG,VCI,VGC,VHC,VHM,VIB,VIC,VIX,VJC,VND,VNM,VPB,VPI,VRE,VSC,VTP"""
+# HÃY DÁN 285 MÃ CỦA BẠN VÀO GIỮA 3 DẤU NGOẶC KÉP DƯỚI ĐÂY
+RAW_TICKERS_STR = """
+AAA, AAM, AAS, ABS, ABT, ACB, ACC, ACL, ADG, ADS, AGG, AGM, AGR, AKV, ALT, AMC, AME, AMV, ANV, APC, APG, APH, ASG, ASM, ASP, AST,
+BAF, BBC, BCE, BCG, BCM, BFC, BHN, BIC, BID, BKG, BMC, BMI, BMP, BRC, BSI, BTP, BTT, BVH, BWE, 
+C32, C47, CAV, CCI, CCL, CDC, CEG, CEO, CHP, CIA, CII, CKG, CLC, CLL, CMG, CMV, CNG, COM, CRC, CRE, CSM, CSV, CTD, CTF, CTG, CTI, CTR, CTS, CVT, D2D, DAG, DAH, DAT, DBC, DBD, DBT, DC4, DCL, DCM, DGC, DGW, DHA, DHC, DHG, DHM, DIG, DLG, DMC, DPG, DPM, DPR, DQC, DRC, DRH, DRL, DSE, DSN, DTA, DTK, DTL, DTT, DVP, DXG, DXS, DXV, EIB, ELC, EVE, EVF, EVG, FCM, FCN, FDC, FIR, FIT, FMC, FPT, FRT, FTS, GAS, GDT, GDU, GEE, GEX, GIL, GMC, GMD, GMX, GSP, GTA, GVR, HAG, HAH, HAP, HAR, HAS, HAX, HBC, HCD, HCM, HDB, HDC, HDG, HHP, HHS, HHV, HID, HII, HMC, HNG, HPG, HQC, HRC, HSG, HSL, HT1, HTI, HTL, HTN, HTV, HU1, HU3, HUB, HVH, HVN, HVX, ICT, IDI, IJC, ILB, IMP, ITA, ITC, ITD, JVC, KBC, KDC, KDH, KHP, KHG, KIP, KMR, KOS, KPF, KSB, L10, L18, LAF, LBM, LCG, LDG, LEC, LGC, LHG, LIX, LM8, LPB, LSS, MBB, MCV, MDG, MHC, MIG, MSB, MSH, MSN, MWG, NAB, NAF, NAG, NBB, NBP, NCT, NHA, NHH, NKG, NLG, NNC, NO1, NT2, NTL, OCB, OGC, ONE, OPC, ORS, PAC, PAN, PC1, PDN, PDR, PET, PGC, PGD, PGI, PHC, PHR, PIT, PJT, PLP, PLX, PME, PNJ, POM, POW, PPC, PSH, PTB, PTC, PTL, PVD, PVT, QBS, QCG, QNS, RAL, RDP, REE, ROS, S4A, SAB, SAM, SBA, SBT, SBV, SC5, SCD, SCR, SCS, SFI, SGN, SGR, SGT, SHA, SHB, SHI, SHP, SIP, SJD, SJS, SKG, SMA, SMB, SMC, SMT, SOT, SPP, SRA, SRC, SRF, SSB, SSI, ST8, STB, STG, STK, SVC, SVD, SVI, SVT, SZC, SZL, TAC, TBC, TCB, TCD, TCH, TCL, TCM, TCO, TCR, TDC, TDG, TDH, TDM, TDP, TDW, TEG, THC, THT, TIP, TIX, TLG, TLH, TMP, TMS, TMT, TN1, TNA, TNC, TNH, TNI, TNT, TPB, TPC, TRA, TRC, TSC, TTA, TTB, TTC, TTF, TV2, TVB, TVC, TVS, TYA, UIC, VAF, VCA, VCB, VCF, VCG, VCI, VDS, VFG, VGC, VHC, VHM, VIB, VIC, VID, VIP, VIX, VJC, VMD, VND, VNE, VNG, VNL, VNM, VNS, VOS, VPB, VPD, VPG, VPH, VPI, VPS, VRC, VRE, VSC, VSH, VSI, VTB, VTO, VTP, YBM, YEG"""
+# (LƯU Ý: BẠN CÓ THỂ PASTE ĐÈ DANH SÁCH CHUẨN CỦA BẠN VÀO TRÊN)
+
 FALLBACK_LIST = [x.strip() for x in RAW_TICKERS_STR.replace("\n", "").split(",") if x.strip()]
 
 def check_liquidity_worker(symbol, min_price, min_vol_avg_5, min_turnover):
@@ -31,7 +37,7 @@ def check_liquidity_worker(symbol, min_price, min_vol_avg_5, min_turnover):
         close = float(last_row["Close"])
         vol_avg_5 = df["Volume"].tail(5).mean()
         
-        # Turnover (đơn vị gốc trong data là nghìn đồng -> so với 10 triệu)
+        # Turnover
         turnover = close * vol_avg_5
 
         if close <= min_price: return None
@@ -44,40 +50,30 @@ def check_liquidity_worker(symbol, min_price, min_vol_avg_5, min_turnover):
 
 def get_vnallshare_universe(days=20, min_price=5.0, min_vol_avg_5=50_000, min_turnover=10_000_000):
     """
-    Logic 3 Tầng: VNALLSHARE -> VN100 -> Danh sách cứng
+    Logic 2 Tầng: VNALLSHARE -> Danh sách cứng 285 mã
     """
     symbols = []
-    source_used = "Fallback"
+    source_used = "Fallback (285 mã)"
 
     if HAS_VNSTOCK_LIB:
-        # --- TẦNG 1: THỬ VNALLSHARE (ƯU TIÊN CAO NHẤT) ---
+        # --- TẦNG 1: THỬ VNALLSHARE (API) ---
         try:
             listing = Listing(source='vci')
             symbols = listing.symbols_by_group("VNALLSHARE").tolist()
-            if symbols and len(symbols) > 100:
+            if symbols and len(symbols) > 200: # VNALLSHARE thường > 300 mã
                 source_used = "API VCI (VNALLSHARE)"
         except Exception:
-            pass # Lặng lẽ bỏ qua để xuống tầng 2
-        
-        # --- TẦNG 2: NẾU TẦNG 1 THẤT BẠI -> THỬ VN100 ---
-        if not symbols:
-            try:
-                listing = Listing(source='vci')
-                symbols = listing.symbols_by_group("VN100").tolist()
-                if symbols and len(symbols) > 50:
-                    source_used = "API VCI (VN100)"
-            except Exception:
-                pass # Lặng lẽ bỏ qua để xuống tầng 3
+            pass # Lỗi thì xuống tầng 2
 
-    # --- TẦNG 3: NẾU CẢ 2 API ĐỀU CHẾT -> DÙNG DANH SÁCH CỨNG ---
+    # --- TẦNG 2: NẾU API LỖI -> DÙNG DANH SÁCH 285 MÃ ---
     if not symbols:
         symbols = FALLBACK_LIST
-        source_used = "Fixed List (Manual)"
+        source_used = f"Danh sách cố định ({len(symbols)} mã)"
 
     # Lọc mã rác
     symbols = [s for s in symbols if len(s) == 3]
 
-    print(f"[Universe] 📋 Nguồn: {source_used} ({len(symbols)} mã).")
+    print(f"[Universe] 📋 Nguồn: {source_used}")
     print(f"[Universe] ⚡ Kích hoạt Pipeline Update (D1)...")
     run_universe_pipeline(symbols, days=days)
 
@@ -94,6 +90,7 @@ def get_vnallshare_universe(days=20, min_price=5.0, min_vol_avg_5=50_000, min_tu
 
     print(f"[Universe] ✅ Kết quả: {len(valid_universe)}/{len(symbols)} mã đạt chuẩn.")
     
+    # Nếu lọc quá gắt ra 0 mã, trả về list gốc
     if not valid_universe:
         return FALLBACK_LIST
     return sorted(valid_universe)
