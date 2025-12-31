@@ -347,7 +347,7 @@ if df_1d is not None and not df_1d.empty:
             with st.spinner("Vẽ 15m..."):
                 fig_15, _ = process_and_plot(
                     df_15m, "15m", show_vol_param=False, show_ma_param=False,
-                    show_vsa_param=False, htf_zones=final_htf, skip_current_zones=True,
+                    show_vsa_param=False, htf_zones=final_htf, skip_current_zones=False,
                     enable_smart_money=use_smart_money, build_fig=True,
                 )
             if fig_15: st.plotly_chart(fig_15, width='stretch', config=plotly_draw_config())

@@ -44,7 +44,7 @@ def _draw_zone_helper(fig, df, zones, interval, opacity=0.1, is_htf=False):
     curr_max = df['High'].max()
     mid_price = (curr_min + curr_max) / 2
     # Với CP > 1000đ thì lọc biên độ 500đ, ngược lại theo %
-    threshold_filter = 500 if mid_price > 1000 else 0.05
+    threshold_filter = 50 if mid_price > 1000 else 0.05
     
     for z in zones:
         if z is None: continue
@@ -450,11 +450,17 @@ def plot_single_timeframe(
 
     # Auto-scale trục Y dựa trên nến đang hiển thị
     df_view = df.tail(zoom_count)
-    visible_min = df_view['Low'].min()
-    visible_max = df_view['High'].max()
-    if not np.isnan(visible_min):
-        p = 0.05 # Padding 5%
-        fig.update_yaxes(range=[visible_min*(1-p), visible_max*(1+p)], row=1, col=1)
+    valid_lows = df_view['Low'][df_view['Low'] > 0]
+    valid_highs = df_view['High'][df_view['High'] > 0]
+    
+    if not valid_lows.empty:
+            visible_min = valid_lows.min()
+            visible_max = valid_highs.max()
+            
+            # Padding trên dưới 2% (nhỏ hơn cũ để chart to hơn)
+            p = 0.02 
+            # Range Y cho chart giá
+            fig.update_yaxes(range=[visible_min*(1-p), visible_max*(1+p)], row=1, col=1)
 
     # --------------------------------------------------------------------------
     # I. XỬ LÝ TRỤC THỜI GIAN (FIX LỖI RANGEBREAKS TOÀN CỤC)
