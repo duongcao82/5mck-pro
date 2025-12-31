@@ -2,7 +2,8 @@ import os
 import sys
 import time
 import streamlit as st
-default_str = """ACB,ANV,BCM,BID,BMP,BSI,BVH,BWE,CII,CMG,CTD,CTG,CTR,CTS,DBC,DCM,DGC,DGW,DIG,DPM,DSE,DXG,DXS,EIB,EVF,FPT,FRT,FTS,GAS,GEE,GEX,GMD,GVR,HAG,HCM,HDB,HDC,HDG,HHV,HPG,HSG,HT1,IMP,KBC,KDC,KDH,KOS,LPB,MBB,MSB,MSN,MWG,NAB,NKG,NLG,NT2,OCB,PAN,PC1,PDR,PHR,PLX,PNJ,POW,PPC,PTB,PVD,PVT,REE,SAB,SBT,SCS,SHB,SIP,SJS,SSB,SSI,STB,SZC,TCB,TCH,TLG,TPB,VCB,VCG,VCI,VGC,VHC,VHM,VIB,VIC,VIX,VJC,VND,VNM,VPB,VPI,VRE,VSC,VTP"""
+from universe import RAW_TICKERS_STR
+default_str = RAW_TICKERS_STR.replace("\n", " ").strip()
 # ==============================================================================
 # 1. SETUP CƠ BẢN & UI SKELETON (CHẠY NGAY LẬP TỨC)
 # ==============================================================================

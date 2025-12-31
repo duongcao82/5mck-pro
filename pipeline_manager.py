@@ -1,5 +1,7 @@
 # src/pipeline_manager.py
 import os
+import time
+import math
 import pandas as pd
 import concurrent.futures
 from datetime import datetime, timedelta
@@ -35,7 +37,6 @@ try:
         from vnstock_pipeline.core.exporter import Exporter
     except ImportError:
         Exporter = object
-
      
     HAS_PIPELINE = True
 
@@ -63,21 +64,14 @@ class SimpleScheduler:
             return False, f"{ticker}: {str(e)}"
 
     def run(self, tickers, fetcher_kwargs, exporter_kwargs):
-        interval = fetcher_kwargs.get('interval', 'Unknown')
-        print(f"🚀 [Pipeline] Đang tải {len(tickers)} mã (Khung: {interval})...")
-        
+        # Hàm này chỉ chạy, không in log tổng để tránh rối khi chạy batch
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_ticker = {
                 executor.submit(self._process_task, t, fetcher_kwargs, exporter_kwargs): t 
                 for t in tickers
             }
-            
             for future in concurrent.futures.as_completed(future_to_ticker):
-                ticker = future_to_ticker[future]
-                try:
-                    success, msg = future.result()
-                except Exception as exc:
-                    print(f"❌ {ticker} Exception: {exc}")
+                pass 
         return "Xong"
 
 Scheduler = SimpleScheduler
@@ -85,9 +79,6 @@ Scheduler = SimpleScheduler
 # ==============================================================================
 # 3. CẤU HÌNH PIPELINE
 # ==============================================================================
-
-# Tìm class AppCacheFetcher trong src/pipeline_manager.py
-# Sửa phương thức _vn_call như sau:
 
 class AppCacheFetcher(VNFetcher):
     """Fetcher: Tải dữ liệu hỗ trợ nhiều khung thời gian"""
@@ -101,28 +92,24 @@ class AppCacheFetcher(VNFetcher):
         end = kwargs.get('end')
         interval = kwargs.get('interval', '1D') 
         
-        # --- LOGIC MỚI: Thử TCBS trước tiên ---
+        # --- LOGIC MỚI: Thử TCBS -> VND -> VCI ---
         try:
-            # Ưu tiên 1: TCBS (Nhanh và ổn định)
             quote = Quote(source='tcbs', symbol=ticker)
             df = quote.history(start=start, end=end, interval=interval)
         except Exception:
             try:
-                # Ưu tiên 2: VND (Dữ liệu lịch sử tốt)
                 quote = Quote(source='vnd', symbol=ticker)
                 df = quote.history(start=start, end=end, interval=interval)
             except Exception:
                 try:
-                    # Ưu tiên 3: VCI (Dự phòng cuối cùng)
                     quote = Quote(source='vci', symbol=ticker)
                     df = quote.history(start=start, end=end, interval=interval)
                 except:
                     return pd.DataFrame()
         
-        if df.empty:
+        if df is None or df.empty:
             raise ValueError(f"No data for {ticker}")
             
-        # ... (Phần chuẩn hóa cột phía dưới giữ nguyên) ...
         df = df.rename(columns={
             'time': 'Date', 'open': 'Open', 'high': 'High', 
             'low': 'Low', 'close': 'Close', 'volume': 'Volume'
@@ -154,13 +141,15 @@ class ParquetCacheExporter(Exporter):
         data.to_parquet(file_path)
 
 # ==============================================================================
-# 4. HÀM CHẠY CHÍNH (ĐÃ FIX LỖI THAM SỐ)
+# 4. HÀM CHẠY CHÍNH (SMART PIPELINE + BATCHING)
 # ==============================================================================
 
 def run_bulk_update(tickers_list, days_back=200):
     """
-    Cập nhật dữ liệu đa khung thời gian.
-    TỐI ƯU HÓA: Chỉ tải dữ liệu recent (gần nhất) cho Intraday để append vào cache.
+    Cập nhật dữ liệu THÔNG MINH (Smart Pipeline):
+    1. Tải D1 (Full list) -> Nhanh, ít bị chặn.
+    2. Lọc mã thanh khoản.
+    3. Tải Intraday (Chỉ mã đạt chuẩn) -> CHIA BATCH để tránh lỗi 429.
     """
     if not HAS_PIPELINE:
         return "⚠️ Lỗi: Chưa cài đặt thư viện 'vnstock_data'."
@@ -168,41 +157,89 @@ def run_bulk_update(tickers_list, days_back=200):
     try:
         fetcher = AppCacheFetcher()
         exporter = ParquetCacheExporter()
+        # Dùng max_workers vừa phải để tránh DDOS
         scheduler = Scheduler(fetcher=fetcher, exporter=exporter, max_workers=10)
         
-        # 1. Lấy thời gian hiện tại
         now = now_vn() 
         end_date = now.strftime('%Y-%m-%d')
+        start_date_d1 = (now - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        start_date_intra = (now - timedelta(days=4)).strftime('%Y-%m-%d')
+
+        # --- BƯỚC 1: TẢI D1 (DAILY) - Chạy 1 lèo vì D1 nhẹ ---
+        print(f"🔄 [1/3] Đang tải D1 cho {len(tickers_list)} mã...")
+        scheduler.run(
+            tickers=tickers_list,
+            fetcher_kwargs={'start': start_date_d1, 'end': end_date, 'interval': '1D'},
+            exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '1D'}
+        )
+
+        # --- BƯỚC 2: LỌC THANH KHOẢN ---
+        valid_tickers = []
+        min_price = 5.0        
+        min_vol = 50_000       
+        min_val = 5_000_000    
+
+        print("🔍 [2/3] Đang lọc thanh khoản...")
+        for sym in tickers_list:
+            try:
+                path = os.path.join(CACHE_DIR, f"{sym}_1D.parquet")
+                if os.path.exists(path):
+                    df = pd.read_parquet(path)
+                    if len(df) > 5:
+                        last = df.iloc[-1]
+                        close = float(last['Close'])
+                        vol = float(df['Volume'].tail(5).mean())
+                        turnover = close * vol 
+                        
+                        if close > min_price and vol > min_vol and turnover > min_val:
+                            valid_tickers.append(sym)
+            except:
+                continue
         
-        # 2. Cấu hình tải thông minh (Smart Update)
-        # - D1: Vẫn tải days_back (mặc định 3 ngày từ app.py truyền vào) để đảm bảo cập nhật giá điều chỉnh/cổ tức nếu có.
-        # - 1H/15m: Chỉ cần tải 4 ngày gần nhất (đủ cover cuối tuần + 1-2 phiên gd) là đủ nối vào cache.
-        
-        configs = [
-            {"label": "D1", "days": days_back, "interval": "1D"}, 
-            {"label": "1H", "days": 4, "interval": "1H"},   # <--- SỬA TỪ 30 XUỐNG 4
-            {"label": "15m", "days": 4, "interval": "15m"}  # <--- SỬA TỪ 12 XUỐNG 4
-        ]
-        
-        # 3. Chạy vòng lặp cập nhật
-        for i, cfg in enumerate(configs, 1):
-            # Tính start_date dựa trên số ngày cần tải thêm
-            start_date = (now - timedelta(days=cfg['days'])).strftime('%Y-%m-%d')
+        print(f"✅ Đã lọc: {len(valid_tickers)}/{len(tickers_list)} mã đạt chuẩn.")
+
+        # --- BƯỚC 3: TẢI INTRADAY (BATCHING - CHIA LÔ) ---
+        if valid_tickers:
+            BATCH_SIZE = 40  # Tải mỗi lần 40 mã
+            total_stocks = len(valid_tickers)
+            num_batches = math.ceil(total_stocks / BATCH_SIZE)
             
-            print(f"🔄 [{i}/3] Smart Update {cfg['label']} ({cfg['days']}d) | {start_date} -> {end_date}")
-            
-            scheduler.run(
-                tickers=tickers_list,
-                fetcher_kwargs={'start': start_date, 'end': end_date, 'interval': cfg['interval']},
-                exporter_kwargs={'output_dir': CACHE_DIR, 'interval': cfg['interval']}
-            )
-        
-        return f"✅ Smart Update hoàn tất! (D1: {days_back}d, Intraday: 4d)"
+            print(f"🔄 [3/3] Tải Intraday cho {total_stocks} mã (Chia làm {num_batches} Batch)...")
+
+            for i in range(0, total_stocks, BATCH_SIZE):
+                batch = valid_tickers[i : i + BATCH_SIZE]
+                current_batch_idx = (i // BATCH_SIZE) + 1
+                
+                print(f"   📦 Batch {current_batch_idx}/{num_batches}: Tải {len(batch)} mã...")
+                
+                # Tải 1H
+                scheduler.run(
+                    tickers=batch,
+                    fetcher_kwargs={'start': start_date_intra, 'end': end_date, 'interval': '1H'},
+                    exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '1H'}
+                )
+                
+                # Tải 15m
+                scheduler.run(
+                    tickers=batch,
+                    fetcher_kwargs={'start': start_date_intra, 'end': end_date, 'interval': '15m'},
+                    exporter_kwargs={'output_dir': CACHE_DIR, 'interval': '15m'}
+                )
+
+                # QUAN TRỌNG: Nghỉ giữa các Batch để tránh lỗi 429
+                if i + BATCH_SIZE < total_stocks:
+                    print("   zzz Nghỉ 5s để tránh nghẽn mạng...")
+                    time.sleep(10) 
+
+        else:
+            print("⚠️ Không có mã nào đạt chuẩn thanh khoản.")
+
+        return f"✅ Hoàn tất! (D1: {len(tickers_list)} mã, Valid: {len(valid_tickers)} mã)"
         
     except Exception as e:
         return f"❌ Lỗi Runtime: {str(e)}"
 
-# Cập nhật trong pipeline_manager.py
+# Hàm này giữ nguyên để Universe gọi
 def run_universe_pipeline(universe_list, days=20):
     """
     Tối ưu hóa quy trình cập nhật Universe:
@@ -214,10 +251,8 @@ def run_universe_pipeline(universe_list, days=20):
 
     print(f"⚡ Pipeline: Đang quét {len(universe_list)} mã (D1)...")
     
-    # Hàm con để update 1 mã
     def _update_worker(sym):
         try:
-            # Load 20 ngày gần nhất để tính thanh khoản là đủ
             load_data_with_cache(sym, days_to_load=days, timeframe="1D")
             return True
         except:
