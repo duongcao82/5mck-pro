@@ -191,7 +191,10 @@ def plot_single_timeframe(
     Candles, MA, VSA, SMC Zones, OTE, Volume, RSI, Smart Money Flow.
     """
     if df is None or df.empty: return go.Figure()
-
+    if interval == '15m':
+        show_vol = False
+        show_rsi = False
+        show_flow = False # Biến nội bộ, sẽ xử lý bên dưới
     # --- CHUẨN BỊ SUBPLOTS ---
     # Row 1: Giá (60%)
     # Row 2: Volume (15%) - Nếu bật
@@ -219,12 +222,14 @@ def plot_single_timeframe(
         smart_money_data = smart_money_data[0] # Lấy df_foreign nếu trả về tuple
     
     show_flow = False
-    if smart_money_data is not None and isinstance(smart_money_data, pd.DataFrame):
-        if not smart_money_data.empty:
-            show_flow = True
-            rows += 1
-            flow_row = rows
-            row_heights.append(0.15)
+    if interval != '15m': # [FIX] Chỉ hiện Flow nếu KHÔNG phải 15m
+        if smart_money_data is not None and isinstance(smart_money_data, pd.DataFrame):
+            if not smart_money_data.empty:
+                show_flow = True
+    if show_flow:
+        rows += 1
+        flow_row = rows
+        row_heights.append(0.15)
 
     # Chuẩn hóa tỷ lệ chiều cao
     total_h = sum(row_heights)
@@ -374,13 +379,22 @@ def plot_single_timeframe(
     # --------------------------------------------------------------------------
     # G. SUB CHARTS (VOLUME, RSI, FLOW)
     # --------------------------------------------------------------------------
-    # 1. Volume
+    #1. Volume & MA10
     if show_vol and vol_row:
-        # Màu Volume theo nến tăng/giảm
+        # Màu Volume
         colors = ['rgba(8, 153, 129, 0.6)' if c >= o else 'rgba(242, 54, 69, 0.6)' for c, o in zip(df['Close'], df['Open'])]
         fig.add_trace(go.Bar(
             x=df.index, y=df['Volume'], 
             name='Volume', marker_color=colors
+        ), row=vol_row, col=1)
+
+        # --- [THÊM MỚI] MA10 CỦA VOLUME ---
+        # Tính MA10 trực tiếp tại đây
+        vol_ma10 = df['Volume'].rolling(10).mean()
+        fig.add_trace(go.Scatter(
+            x=df.index, y=vol_ma10,
+            line=dict(color='#FFD700', width=1.5), # Màu vàng
+            name='Vol MA(10)'
         ), row=vol_row, col=1)
     
     # 2. RSI

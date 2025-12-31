@@ -300,13 +300,16 @@ if df_1d is not None and not df_1d.empty:
 
     tf_choice = st.radio("Khung thời gian", ["Daily (1D)", "Hourly (1H)", "15 Minutes"], horizontal=True)
 
+    # 1. Khởi tạo biến Session State nếu chưa có (để tránh lỗi khi gọi)
     if "d1_zones" not in st.session_state: st.session_state.d1_zones = []
     if "h1_zones" not in st.session_state: st.session_state.h1_zones = []
 
+    # 2. Xử lý logic theo Khung thời gian
     if tf_choice == "Daily (1D)":
         with st.spinner("Vẽ 1D..."):
             fig_d1, d1_zones = process_and_plot(
-                df_1d, "1D", show_vol_param=use_vol, show_ma_param=use_ma,
+                df_1d, "1D", 
+                show_vol_param=use_vol, show_ma_param=use_ma,
                 show_vsa_param=use_vsa, htf_zones=[], skip_current_zones=False,
                 enable_smart_money=use_smart_money, build_fig=True,
             )
@@ -314,6 +317,7 @@ if df_1d is not None and not df_1d.empty:
         if fig_d1: st.plotly_chart(fig_d1, width='stretch', config=plotly_draw_config())
 
     elif tf_choice == "Hourly (1H)":
+        # Đảm bảo đã có Zone D1 trước khi vẽ H1
         if not st.session_state.d1_zones:
             _, st.session_state.d1_zones = process_and_plot(df_1d, "1D", build_fig=False)
 
@@ -321,39 +325,65 @@ if df_1d is not None and not df_1d.empty:
         if df_1h is not None and not df_1h.empty:
             with st.spinner("Vẽ 1H..."):
                 fig_h1, h1_zones = process_and_plot(
-                    df_1h, "1H", show_vol_param=False, show_ma_param=False,
-                    show_vsa_param=False, htf_zones=st.session_state.d1_zones,
-                    skip_current_zones=False, enable_smart_money=use_smart_money, build_fig=True,
+                    df_1h, "1H", 
+                    # Bật các chỉ báo cho H1 (như D1)
+                    show_vol_param=use_vol,      
+                    show_ma_param=use_ma,        
+                    show_vsa_param=use_vsa,      
+                    htf_zones=st.session_state.d1_zones,
+                    skip_current_zones=False, 
+                    enable_smart_money=use_smart_money, 
+                    build_fig=True,
                 )
                 st.session_state.h1_zones = h1_zones
             if fig_h1: st.plotly_chart(fig_h1, width='stretch', config=plotly_draw_config())
-        else: st.warning("Chưa có data 1H.")
+        else: 
+            st.warning("Chưa có data 1H.")
 
-    else:
+    else: # 15 Minutes
+        # Đảm bảo đã có Zone D1
         if not st.session_state.d1_zones:
             _, st.session_state.d1_zones = process_and_plot(df_1d, "1D", build_fig=False)
         
-        use_h1_overlay = st.checkbox("Overlay zones 1H", value=False)
-        h1_zones = []
-        if use_h1_overlay:
-            df_1h = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
-            if df_1h is not None and not df_1h.empty:
-                _, h1_zones = process_and_plot(df_1h, "1H", htf_zones=st.session_state.d1_zones, enable_smart_money=False, build_fig=False)
-                for z in h1_zones: z["is_from_1h"] = True
+        # --- [QUAN TRỌNG] Khởi tạo h1_zones rỗng để tránh NameError ---
+        h1_zones = [] 
         
+        # Logic Overlay H1 (Nếu user tích chọn thì mới tính toán)
+        use_h1_overlay = st.checkbox("Overlay zones 1H", value=False)
+        
+        if use_h1_overlay:
+            # Ưu tiên lấy từ cache session nếu đã có
+            if st.session_state.h1_zones:
+                h1_zones = st.session_state.h1_zones
+            else:
+                # Nếu chưa có thì load data H1 tính nóng
+                df_1h_temp = load_data_with_cache(symbol, days_to_load=200, timeframe="1H")
+                if df_1h_temp is not None and not df_1h_temp.empty:
+                    _, h1_zones = process_and_plot(df_1h_temp, "1H", build_fig=False)
+                    st.session_state.h1_zones = h1_zones # Lưu lại cho lần sau
+
+        # Tải dữ liệu 15m
         df_15m = load_data_with_cache(symbol, days_to_load=400, timeframe="15m")
+        
         if df_15m is not None and not df_15m.empty:
+            # Gộp zone: D1 + H1 (nếu có)
             final_htf = list(st.session_state.d1_zones) + list(h1_zones)
+            
             with st.spinner("Vẽ 15m..."):
                 fig_15, _ = process_and_plot(
-                    df_15m, "15m", show_vol_param=False, show_ma_param=False,
-                    show_vsa_param=False, htf_zones=final_htf, skip_current_zones=False,
-                    enable_smart_money=use_smart_money, build_fig=True,
+                    df_15m, "15m", 
+                    # Tắt hết chỉ báo phụ ở 15m cho nhẹ
+                    show_vol_param=False, 
+                    show_ma_param=False, 
+                    show_vsa_param=False,
+                    enable_smart_money=False,
+                    htf_zones=final_htf, 
+                    skip_current_zones=False, # Vẽ zone 15m
+                    build_fig=True,
                 )
             if fig_15: st.plotly_chart(fig_15, width='stretch', config=plotly_draw_config())
-        else: st.warning("Chưa có data 15m.")
-else:
-    st.error(f"⚠️ Chưa có dữ liệu {symbol}.")
+        else: 
+            st.warning("Chưa có data 15m.")
 
 
 # ============================================================================
