@@ -507,19 +507,53 @@ def plot_single_timeframe(
     
     # Layout cuối cùng
     fig.update_layout(
-        template="plotly_dark", 
-        height=700 if (show_rsi or show_flow) else 550,
-        margin=dict(l=10, r=50, t=30, b=10), 
-        legend=dict(orientation="h", y=1.01, x=0),
-        xaxis_rangeslider_visible=False, 
-        hovermode="x unified", 
-        dragmode="pan"
+        title=f"{symbol} ({interval})",
+        template="plotly_dark",
+        # Tự động chỉnh chiều cao: Nếu có RSI/Vol thì cao 700, không thì 500
+        height=700 if (show_rsi or show_vol) else 500,
+        margin=dict(l=10, r=50, t=40, b=10),
+        legend=dict(orientation="h", y=1.02, x=0),
+        xaxis_rangeslider_visible=False,
+        
+        # [QUAN TRỌNG 1] Hover thống nhất (Hiện tất cả thông số khi rê chuột)
+        hovermode="x unified",
+        
+        # [QUAN TRỌNG 2] Chế độ chuột mặc định là Pan (Kéo) để dễ vẽ
+        dragmode='pan',
+        
+        # [QUAN TRỌNG 3] Thêm thanh công cụ vẽ
+        modebar=dict(
+            add=[
+                'drawline',
+                'drawopenpath',
+                'drawcircle',
+                'drawrect',
+                'eraseshape'
+            ]
+        )
     )
     
-    # Cho phép trục Y scale tự do
-    fig.update_yaxes(fixedrange=False, row=1, col=1)
+    # Cấu hình đường gióng (Crosshair) đứt đoạn
+    spike_settings = dict(
+        showspikes=True, 
+        spikemode="across", 
+        spikesnap="cursor",
+        showline=True, 
+        spikedash="dash", 
+        spikecolor="#999999", # Màu xám nhạt
+        spikethickness=1
+    )
     
-    return fig
+    # Áp dụng cho trục X (Thời gian)
+    fig.update_xaxes(**spike_settings, row=1, col=1)
+    if vol_row: fig.update_xaxes(**spike_settings, row=vol_row, col=1)
+    if rsi_row: fig.update_xaxes(**spike_settings, row=rsi_row, col=1)
+    
+    # Áp dụng cho trục Y (Giá) - Để tạo thành dấu cộng
+    fig.update_yaxes(**spike_settings, fixedrange=False, row=1, col=1)
+
+    return fig    
+    
 
 # ==============================================================================
 # 4. HÀM VẼ SMART MONEY RIÊNG (TAB RIÊNG)
@@ -556,3 +590,22 @@ def plot_smart_money(df_foreign, df_prop, df_depth):
         figs['prop'] = fig_p
 
     return figs
+
+def plotly_draw_config():
+    """
+    Cấu hình để hiển thị thanh công cụ vẽ trên Streamlit
+    """
+    return {
+        'scrollZoom': True,
+        'displayModeBar': True,
+        'modeBarButtonsable': True,
+        # Thêm các nút vẽ vào thanh công cụ
+        'modeBarButtonsToAdd': [
+            'drawline',       # Vẽ đường thẳng
+            'drawopenpath',   # Vẽ tự do
+            'drawcircle',     # Vẽ hình tròn
+            'drawrect',       # Vẽ hình chữ nhật (Box)
+            'eraseshape'      # Cục tẩy
+        ],
+        'displaylogo': False
+    }
